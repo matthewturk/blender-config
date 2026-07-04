@@ -21,6 +21,14 @@ def draw_popup(self, context):
     elif UV_STATUS == "ERROR":
         layout.label(text="Background uv sync failed. Check system console.", icon='CANCEL')
 
+def safe_ui_refresh():
+    """This callback runs safely on Blender's main thread to refresh the UI."""
+    # Tag all visible areas to redraw themselves cleanly
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            area.tag_redraw()
+    return None # Returning None tells Blender to run the timer exactly once and stop
+
 def run_background_sync(uv_bin, project_dir):
     global UV_STATUS
     try:
@@ -29,11 +37,14 @@ def run_background_sync(uv_bin, project_dir):
         UV_STATUS = "SYNC_COMPLETE"
         print("[Chezmoi/uv] Background sync completed successfully.")
         
-        # Force a safe UI redraw in Blender to update notifications if open
-        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+        # Safe alternative: Register a deferred 1-shot timer on the main thread
+        bpy.app.timers.register(safe_ui_refresh)
+        
     except Exception as e:
         UV_STATUS = "ERROR"
         print(f"[Chezmoi/uv Error] Background uv sync failed: {e}")
+        # Make sure the error state redraws too
+        bpy.app.timers.register(safe_ui_refresh)
 
 @persistent
 def load_and_sync_chezmoi(dummy=None):
@@ -95,7 +106,6 @@ def load_and_sync_chezmoi(dummy=None):
     # Dynamically attach venv path matching active Python major.minor version
     py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
     uv_venv = os.path.join(project_dir, ".venv", "lib", f"python{py_version}", "site-packages")
-    print(uv_venv)
     if os.path.exists(uv_venv) and uv_venv not in sys.path:
         sys.path.append(uv_venv)
         print(f"[Chezmoi/uv] Dynamically attached venv environment for Python {py_version}")
