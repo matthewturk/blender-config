@@ -182,6 +182,38 @@ def load_and_sync_chezmoi(dummy=None):
                 print(f"[Chezmoi/Preferences] Successfully attached asset library: {target_name} -> {target_path} ({target_method})")
             except Exception as e:
                 print(f"[Chezmoi/Preferences Error] Failed to register asset library: {e}")
+    # -------------------------------------------------------------------------
+    # PART 4: Automated Extension/Add-on Synchronization (Blender 4.2+)
+    # -------------------------------------------------------------------------
+    if "extensions" in config and config["extensions"]:
+        installed_addons = bpy.context.preferences.addons.keys()
+        missing_extensions = []
+        
+        for pkg_id in config["extensions"]:
+            # Note: Blender names extension modules as 'blender_org.package_id'
+            # We check for both standard names and extension-prefixed names
+            ext_name = f"blender_org.{pkg_id}"
+            if pkg_id not in installed_addons and ext_name not in installed_addons:
+                missing_extensions.append(pkg_id)
+
+        if missing_extensions:
+            print(f"[Chezmoi/Extensions] Found {len(missing_extensions)} missing extensions. Synchronizing repositories...")
+            try:
+                # 1. Force Blender to refresh its remote repository cache indices
+                bpy.ops.extensions.repo_sync_all()
+                
+                # 2. Iterate and download the missing packages from the default store (repo_index=0)
+                for pkg_id in missing_extensions:
+                    print(f"[Chezmoi/Extensions] Downloading and enabling extension: {pkg_id}")
+                    bpy.ops.extensions.package_install(repo_index=0, pkg_id=pkg_id, enable_on_install=True)
+                    
+                # 3. Commit preferences changes to disk persistently
+                bpy.ops.wm.save_userpref()
+                print("[Chezmoi/Extensions] All extensions synchronized successfully.")
+            except Exception as e:
+                print(f"[Chezmoi/Extensions Error] Network installation failed: {e}")
+        else:
+            print("[Chezmoi/Extensions] All specified extensions are already installed and active.")
 
 def register():
     # Hook directly into the post-load routine so context variables exist safely
