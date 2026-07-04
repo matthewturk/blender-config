@@ -132,6 +132,40 @@ def load_and_sync_chezmoi(dummy=None):
     except Exception as e:
         print(f"[Chezmoi/uv Error] Failed during dependency environment verification: {e}")
 
+    # 3. Configure Asset Libraries (with an existence/uniqueness guard)
+    if "asset_libraries" in config:
+        filepath_prefs = prefs.filepaths
+        existing_libs = {lib.path: lib.name for lib in filepath_prefs.asset_libraries}
+        
+        for lib_cfg in config["asset_libraries"]:
+            target_name = lib_cfg["name"]
+            target_path = os.path.expanduser(lib_cfg["path"])
+            
+            # Ensure the physical target path actually exists on this host machine first
+            if not os.path.exists(target_path):
+                print(f"[Chezmoi/Preferences Warning] Skipping asset library '{target_name}'; path does not exist: {target_path}")
+                continue
+                
+            # Idempotent Guard Check: Skip if the exact path is already registered
+            if target_path in existing_libs:
+                print(f"[Chezmoi/Preferences] Asset library path already registered: {target_path}")
+                continue
+            
+            # Alternatively, guard against duplicate library names
+            if any(lib.name == target_name for lib in filepath_prefs.asset_libraries):
+                print(f"[Chezmoi/Preferences Warning] Asset library name '{target_name}' already exists with a different path. Skipping.")
+                continue
+
+            # Safe to append
+            try:
+                bpy.ops.preferences.asset_library_add(directory=target_path)
+                # The operator sets a default name based on the folder; rename it to match your config
+                new_lib = filepath_prefs.asset_libraries[-1]
+                new_lib.name = target_name
+                print(f"[Chezmoi/Preferences] Successfully attached asset library: {target_name} -> {target_path}")
+            except Exception as e:
+                print(f"[Chezmoi/Preferences Error] Failed to register asset library: {e}")
+
 def register():
     # Hook directly into the post-load routine so context variables exist safely
     bpy.app.handlers.load_post.append(load_and_sync_chezmoi)
