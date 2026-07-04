@@ -254,7 +254,9 @@ def load_and_sync_chezmoi(dummy=None):
                     f"[Chezmoi/Preferences] Applied {total_applied} add-on preference value(s)."
                 )
         else:
-            print("[Chezmoi/Preferences Warning] 'addon_preferences' must be an object/dict.")
+            print(
+                "[Chezmoi/Preferences Warning] 'addon_preferences' must be an object/dict."
+            )
 
     # 3.3 Configure Asset Libraries (Idempotent Guard with Path Updates)
     if "asset_libraries" in config:
