@@ -62,10 +62,40 @@ def _module_matches_package(module_name, pkg_id):
     return module_name == pkg_id or module_name.endswith(f".{pkg_id}")
 
 
+def _apply_property_map(target, values, label):
+    """Apply a dict of properties onto a Blender RNA object defensively."""
+    if not isinstance(values, dict):
+        print(f"[Chezmoi/Preferences Warning] {label} must be an object/dict.")
+        return 0
+
+    applied = 0
+    for key, value in values.items():
+        if not hasattr(target, key):
+            print(f"[Chezmoi/Preferences Warning] Unknown property '{key}' in {label}.")
+            continue
+        try:
+            setattr(target, key, value)
+            applied += 1
+        except Exception as e:
+            print(f"[Chezmoi/Preferences Warning] Failed to set {label}.{key}: {e}")
+    return applied
+
+
+def _resolve_addon_module(addons_by_name, addon_key):
+    """Resolve configured add-on key to an enabled add-on module name."""
+    if addon_key in addons_by_name:
+        return addon_key
+    return next(
+        (name for name in addons_by_name if _module_matches_package(name, addon_key)),
+        None,
+    )
+
+
 @persistent
 def load_and_sync_chezmoi(dummy=None):
     global UV_STATUS
     config = {}
+    prefs = bpy.context.preferences
 
     # Define paths relative to your local blender config directory
     project_dir = os.path.expanduser("~/.config/blender/blender-config")
@@ -78,8 +108,6 @@ def load_and_sync_chezmoi(dummy=None):
         try:
             with open(config_path, "r") as f:
                 config = json.load(f)
-
-            prefs = bpy.context.preferences
 
             # 1. Set Interface Scale
             if "interface_scale" in config:
@@ -159,7 +187,76 @@ def load_and_sync_chezmoi(dummy=None):
             f"[Chezmoi/uv Error] Failed during dependency environment verification: {e}"
         )
 
-    # 3. Configure Asset Libraries (Idempotent Guard with Path Updates)
+    # 3.1 Configure Input, Navigation, and External Tools preferences
+    if "input" in config:
+        applied = _apply_property_map(prefs.inputs, config["input"], "input")
+        if applied:
+            print(f"[Chezmoi/Preferences] Applied {applied} input preference(s).")
+
+    if "filepaths" in config:
+        applied = _apply_property_map(prefs.filepaths, config["filepaths"], "filepaths")
+        if applied:
+            print(f"[Chezmoi/Preferences] Applied {applied} filepath preference(s).")
+
+    if "external_tools" in config and isinstance(config["external_tools"], dict):
+        external_tools = config["external_tools"]
+        mapped = {
+            "text_editor": "text_editor",
+            "image_editor": "image_editor",
+            "animation_player": "animation_player",
+        }
+        applied = 0
+        for config_key, blender_key in mapped.items():
+            if config_key not in external_tools:
+                continue
+            tool_path = os.path.expanduser(str(external_tools[config_key]))
+            if hasattr(prefs.filepaths, blender_key):
+                setattr(prefs.filepaths, blender_key, tool_path)
+                applied += 1
+            else:
+                print(
+                    f"[Chezmoi/Preferences Warning] External tool setting unsupported: {blender_key}"
+                )
+        if applied:
+            print(f"[Chezmoi/Preferences] Applied {applied} external tool path(s).")
+
+    # 3.2 Configure enabled add-on preferences
+    if "addon_preferences" in config:
+        addon_prefs_cfg = config["addon_preferences"]
+        if isinstance(addon_prefs_cfg, dict):
+            addons_by_name = prefs.addons
+            total_applied = 0
+            for addon_key, values in addon_prefs_cfg.items():
+                module_name = _resolve_addon_module(addons_by_name, addon_key)
+                if not module_name:
+                    print(
+                        f"[Chezmoi/Preferences Warning] Add-on '{addon_key}' is not enabled; cannot apply preferences."
+                    )
+                    continue
+
+                addon_entry = addons_by_name.get(module_name)
+                addon_prefs = getattr(addon_entry, "preferences", None)
+                if addon_prefs is None:
+                    print(
+                        f"[Chezmoi/Preferences Warning] Add-on '{module_name}' has no configurable preferences."
+                    )
+                    continue
+
+                applied = _apply_property_map(
+                    addon_prefs,
+                    values,
+                    f"addon_preferences.{module_name}",
+                )
+                total_applied += applied
+
+            if total_applied:
+                print(
+                    f"[Chezmoi/Preferences] Applied {total_applied} add-on preference value(s)."
+                )
+        else:
+            print("[Chezmoi/Preferences Warning] 'addon_preferences' must be an object/dict.")
+
+    # 3.3 Configure Asset Libraries (Idempotent Guard with Path Updates)
     if "asset_libraries" in config:
         filepath_prefs = prefs.filepaths
 

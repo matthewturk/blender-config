@@ -2,6 +2,19 @@
   "interface_scale": {{ if eq .chezmoi.hostname "hex" }} 1.0 {{ else }} 1.25 {{ end }},
   "render_device_type": "{{ if eq .chezmoi.hostname "bursar" }}NONE{{ else }}OptiX{{ end }}",
   "theme": "Deep Grey",
+  "input": {
+    "select_mouse": "LEFT",
+    "view_rotate_method": "TURNTABLE",
+    "use_zoom_to_mouse": true,
+    "use_rotate_around_active": true,
+    "use_auto_perspective": true
+  },
+  "external_tools": {
+    "text_editor": "/usr/bin/code"
+  },
+  "addon_preferences": {
+    "node_wrangler": {}
+  },
   "asset_libraries": [
     {
       "name": "Personal Assets",

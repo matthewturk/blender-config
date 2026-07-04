@@ -1,5 +1,18 @@
 {
-  "interface_scale":  1.25 ,
+  "interface_scale": 1.25,
   "render_device_type": "NONE",
-  "theme": "Deep Grey"
+  "theme": "Deep Grey",
+  "input": {
+    "select_mouse": "LEFT",
+    "view_rotate_method": "TURNTABLE",
+    "use_zoom_to_mouse": true,
+    "use_rotate_around_active": true,
+    "use_auto_perspective": true
+  },
+  "external_tools": {
+    "text_editor": "/usr/bin/code"
+  },
+  "addon_preferences": {
+    "node_wrangler": {}
+  }
 }
