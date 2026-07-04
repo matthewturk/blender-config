@@ -132,37 +132,54 @@ def load_and_sync_chezmoi(dummy=None):
     except Exception as e:
         print(f"[Chezmoi/uv Error] Failed during dependency environment verification: {e}")
 
-    # 3. Configure Asset Libraries (with an existence/uniqueness guard)
+    # 3. Configure Asset Libraries (Idempotent Guard with Path Updates)
     if "asset_libraries" in config:
         filepath_prefs = prefs.filepaths
-        existing_libs = {lib.path: lib.name for lib in filepath_prefs.asset_libraries}
         
         for lib_cfg in config["asset_libraries"]:
             target_name = lib_cfg["name"]
             target_path = os.path.expanduser(lib_cfg["path"])
+            target_method = lib_cfg.get("import_method", "LINK").upper() 
             
-            # Ensure the physical target path actually exists on this host machine first
             if not os.path.exists(target_path):
                 print(f"[Chezmoi/Preferences Warning] Skipping asset library '{target_name}'; path does not exist: {target_path}")
                 continue
-                
-            # Idempotent Guard Check: Skip if the exact path is already registered
-            if target_path in existing_libs:
-                print(f"[Chezmoi/Preferences] Asset library path already registered: {target_path}")
-                continue
             
-            # Alternatively, guard against duplicate library names
-            if any(lib.name == target_name for lib in filepath_prefs.asset_libraries):
-                print(f"[Chezmoi/Preferences Warning] Asset library name '{target_name}' already exists with a different path. Skipping.")
+            # Search for an existing library matching this exact name
+            existing_lib = next((lib for lib in filepath_prefs.asset_libraries if lib.name == target_name), None)
+            
+            if existing_lib:
+                # Name match found! Check if the path or method needs to be synchronized
+                updated = False
+                
+                # Normalize paths to avoid false mismatches from trailing slashes
+                if os.path.normpath(existing_lib.path) != os.path.normpath(target_path):
+                    existing_lib.path = target_path
+                    updated = True
+                    print(f"[Chezmoi/Preferences] Remapped path for asset library '{target_name}' -> {target_path}")
+                    
+                if existing_lib.import_method != target_method:
+                    existing_lib.import_method = target_method
+                    updated = True
+                    print(f"[Chezmoi/Preferences] Updated import method for '{target_name}' -> {target_method}")
+                    
+                if not updated:
+                    print(f"[Chezmoi/Preferences] Asset library '{target_name}' is already up-to-date.")
                 continue
 
-            # Safe to append
+            # If the name doesn't exist at all, check if the path is duplicated under a different name
+            if any(os.path.normpath(lib.path) == os.path.normpath(target_path) for lib in filepath_prefs.asset_libraries):
+                print(f"[Chezmoi/Preferences Warning] Path '{target_path}' is already registered under a different library name. Skipping.")
+                continue
+
+            # Safe to add a brand new library entry
             try:
                 bpy.ops.preferences.asset_library_add(directory=target_path)
-                # The operator sets a default name based on the folder; rename it to match your config
                 new_lib = filepath_prefs.asset_libraries[-1]
                 new_lib.name = target_name
-                print(f"[Chezmoi/Preferences] Successfully attached asset library: {target_name} -> {target_path}")
+                if target_method in {'LINK', 'APPEND', 'APPEND_REUSE'}:
+                    new_lib.import_method = target_method
+                print(f"[Chezmoi/Preferences] Successfully attached asset library: {target_name} -> {target_path} ({target_method})")
             except Exception as e:
                 print(f"[Chezmoi/Preferences Error] Failed to register asset library: {e}")
 
