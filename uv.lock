@@ -1,6 +1,10 @@
 version = 1
 revision = 3
 requires-python = ">=3.13"
+resolution-markers = [
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "platform_machine != 'arm64' or sys_platform != 'darwin'",
+]
 
 [[package]]
 name = "blender"
@@ -10,6 +14,7 @@ dependencies = [
     { name = "h5py" },
     { name = "matplotlib" },
     { name = "unyt" },
+    { name = "yt" },
 ]
 
 [package.metadata]
@@ -17,6 +22,29 @@ requires-dist = [
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "matplotlib", specifier = ">=3.11.0" },
     { name = "unyt", specifier = ">=3.1.0" },
+    { name = "yt", specifier = ">=4.4.2" },
+]
+
+[[package]]
+name = "cmyt"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/88/48/374669553a8f667148777442821285fb609e0b8fa26e7cf906a20e1dd85f/cmyt-2.0.2.tar.gz", hash = "sha256:cf308415401c615dffded3033be575373553573740298e44ef4b016ffd99a9be", size = 71268, upload-time = "2025-01-23T11:04:54.806Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/13/7f45b93baa90aa1fc447103255164b2c369ea1a56caa617821f110101f35/cmyt-2.0.2-py3-none-any.whl", hash = "sha256:c814a9d0d6d71b5354a0e0fcff1d8d08f9cefd3985c767f9ea06ff4d28cb4c40", size = 30169, upload-time = "2025-01-23T11:04:53.028Z" },
+]
+
+[[package]]
+name = "colorama"
+version = "0.4.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
 ]
 
 [[package]]
@@ -81,6 +109,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a9/95/a3dbbb5028f35eafb79008e7522a75244477d2838f38cbb722248dabc2a8/cycler-0.12.1.tar.gz", hash = "sha256:88bb128f02ba341da8ef447245a9e138fae777f6a23943da4540077d3601eb1c", size = 7615, upload-time = "2023-10-07T05:32:18.335Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl", hash = "sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30", size = 8321, upload-time = "2023-10-07T05:32:16.783Z" },
+]
+
+[[package]]
+name = "ewah-bool-utils"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4f/19/ffa38c8fca8d204e2123905fcd796e631202fee893ba55e0a28a4cc48224/ewah_bool_utils-1.3.0.tar.gz", hash = "sha256:5768183dc723149bc8e9d6181d93bf69825f643034622cc275d919afb5f84668", size = 48616, upload-time = "2025-06-27T13:34:27.258Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/85/5659e3c099674aa4e52ae834100140e73a20118142bee6e882fe5d3ab9a1/ewah_bool_utils-1.3.0-cp311-abi3-macosx_10_9_x86_64.whl", hash = "sha256:b460dd4c6876b4a80e10c6b71b4c7f6c14de0480f920746c426d91123c05c6a8", size = 391685, upload-time = "2025-06-27T13:34:21.53Z" },
+    { url = "https://files.pythonhosted.org/packages/3f/30/b78f0c1dbabcb89b8617f91cbff2b7e6654574fdcee488dd44f1768d9f69/ewah_bool_utils-1.3.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:0aeef22f9e376347e6d2f50619a115adfeaf0dcb97d4600c9fb11621cc5311b6", size = 366117, upload-time = "2025-06-27T13:34:22.424Z" },
+    { url = "https://files.pythonhosted.org/packages/5d/9e/a2834de5221137e8314a4d98cd75140ab6b4f7f447d6a527d1a07ac96eb5/ewah_bool_utils-1.3.0-cp311-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:61ebb598465c791564cfa523b48bbd123840dd003d8e0a4a616a8ab060db91a5", size = 2927912, upload-time = "2025-06-27T13:34:23.629Z" },
+    { url = "https://files.pythonhosted.org/packages/65/4c/b2c2b40dcb5287fcd8538d0448f97cdcc9f6d93c34d02407afc6b77a5a94/ewah_bool_utils-1.3.0-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:c844d6b210f08a18f1496312ccd5761a6d92700c4f2a622afe21893ea47e98b3", size = 3803752, upload-time = "2025-06-27T13:34:25.039Z" },
+    { url = "https://files.pythonhosted.org/packages/90/65/0dac947ffba66c63051847ad07b79856c97282a27391cec905d4ef286252/ewah_bool_utils-1.3.0-cp311-abi3-win_amd64.whl", hash = "sha256:051f131dd29ee1551a1a6342bfdcfe8ddfccebd64aabfe44ad65d4ebf3477f43", size = 982665, upload-time = "2025-06-27T13:34:26.168Z" },
 ]
 
 [[package]]
@@ -266,6 +310,15 @@ wheels = [
 ]
 
 [[package]]
+name = "more-itertools"
+version = "11.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/1d/f4da6f02cdffe04d6362210b807146a26044c88d839208aec273bb0d9184/more_itertools-11.1.0.tar.gz", hash = "sha256:48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d", size = 145772, upload-time = "2026-05-22T14:14:29.909Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/3d/1087453384dbde46a8c7f9356eead2c58be8a7bf156bca40243377c85715/more_itertools-11.1.0-py3-none-any.whl", hash = "sha256:4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192", size = 72226, upload-time = "2026-05-22T14:14:28.824Z" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -428,6 +481,27 @@ wheels = [
 ]
 
 [[package]]
+name = "tomli-w"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/75/241269d1da26b624c0d5e110e8149093c759b7a286138f4efd61a60e75fe/tomli_w-1.2.0.tar.gz", hash = "sha256:2dd14fac5a47c27be9cd4c976af5a12d87fb1f0b4512f81d69cce3b35ae25021", size = 7184, upload-time = "2025-01-15T12:07:24.262Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c7/18/c86eb8e0202e32dd3df50d43d7ff9854f8e0603945ff398974c1d91ac1ef/tomli_w-1.2.0-py3-none-any.whl", hash = "sha256:188306098d013b691fcadc011abd66727d3c414c571bb01b1a174ba8c983cf90", size = 6675, upload-time = "2025-01-15T12:07:22.074Z" },
+]
+
+[[package]]
+name = "tqdm"
+version = "4.68.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/d7/0535a28b1f5f24f6612fb3ff1e89fb1a8d160fee0f976e0aa6803862134b/tqdm-4.68.3.tar.gz", hash = "sha256:00dfa48452b6b6cfae3dd9885636c23d3422d1ec97c66d96818cbd5e0821d482", size = 170596, upload-time = "2026-06-17T07:36:52.105Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/8e/bb97bb0c71802080bfc8952937d174e49cfc50de5c951dd47b2496f0dcdb/tqdm-4.68.3-py3-none-any.whl", hash = "sha256:39832cc2def2789a6f29df83f172db7416cea70052c0907a57801c5f2fdccb03", size = 78337, upload-time = "2026-06-17T07:36:50.132Z" },
+]
+
+[[package]]
 name = "unyt"
 version = "3.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -439,4 +513,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2e/27/3020d6cff4586dea10f1004f5bdf6f1b18a639485cfe8a24db29bb2f3847/unyt-3.1.0.tar.gz", hash = "sha256:771582a87f1e521c9b62f7ca269b1965c0f77b479f7a063a51e8cef8b4cae51d", size = 141137, upload-time = "2026-01-15T16:51:42.513Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/53/8a/889bfb9c7fe296e8f6224498d173442250b3ee4706d04d286971a348e07c/unyt-3.1.0-py3-none-any.whl", hash = "sha256:6ff9efe694a1c13f5b07ccb4c6b30a0e282d5e4989947f0ef5aadf4ad7be3f69", size = 150044, upload-time = "2026-01-15T16:51:43.76Z" },
+]
+
+[[package]]
+name = "yt"
+version = "4.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cmyt" },
+    { name = "ewah-bool-utils" },
+    { name = "matplotlib" },
+    { name = "more-itertools" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "pillow" },
+    { name = "tomli-w" },
+    { name = "tqdm" },
+    { name = "unyt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/32/60/01bd06e147ad1c437f17bc2b6aa17ce48760556507d88d291386f2b7ed16/yt-4.4.2.tar.gz", hash = "sha256:e0883a89c2543b436c3778f555edf253c71f252f744752dc1688f8524ad03b0b", size = 4946809, upload-time = "2025-11-18T16:45:16.118Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/79/d5/b08efa45f910574035d71c9cdcd3fb138205980ff5dbe24e73e6bc0bc7a0/yt-4.4.2-cp311-abi3-macosx_10_9_x86_64.whl", hash = "sha256:97ce93dc02d83c4607e6182a4caf3998e849049fc9762d7d1d2fca5c6399b985", size = 6483893, upload-time = "2025-11-18T16:45:05.414Z" },
+    { url = "https://files.pythonhosted.org/packages/80/69/515f94735278665fdd5b6135d6bbb8d332f7d2f36dd24b7e1b49d8295d98/yt-4.4.2-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:69db933ad99bfdc1e810c85b94f671a8ed07cb3e57e3775252548cfc9456a8e6", size = 6492665, upload-time = "2025-11-18T16:45:06.71Z" },
+    { url = "https://files.pythonhosted.org/packages/19/19/0db5ebd4e9c132151ad65361130518ebb0467b7a34bbc9fca0f9c5a57067/yt-4.4.2-cp311-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:10f03fa53440c030ceed7323a5fb11468ec103415df07e17e96f3027b2ba0a32", size = 31815708, upload-time = "2025-11-18T16:45:08.337Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/e1/54f4bf2b49c45fbec1ed123971ac0c8e54438be1ec27b69ded17c41837e8/yt-4.4.2-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:bd313ff522ca018b30407267052ee72a084fc7927aab2feb77877742cd38c971", size = 32578256, upload-time = "2025-11-18T16:45:11.904Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/b1/1a4402e1634b8bec454fa51ec0ce9de38ab3496822c3847c3e1e328dd2ab/yt-4.4.2-cp311-abi3-win_amd64.whl", hash = "sha256:5cca478f34e341a7ae231e2936463e9134134a17eb0854e51f0cefd33d1edddf", size = 16071379, upload-time = "2025-11-18T16:45:14.115Z" },
 ]
