@@ -40,8 +40,8 @@ def load_and_sync_chezmoi(dummy=None):
     global UV_STATUS
     
     # Define paths relative to your local blender config directory
-    project_dir = os.path.expanduser("~/.config/blender/")
-    config_path = os.path.join(project_dir, "config.json")
+    project_dir = os.path.expanduser("~/.config/blender/blender-config")
+    config_path = os.path.expanduser("~/.config/blender/config.json")
     
     # -------------------------------------------------------------------------
     # PART 1: Apply Plain-Text Preferences (UI Scale, Render Devices)
