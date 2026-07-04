@@ -111,9 +111,8 @@ def load_and_sync_chezmoi(dummy=None):
         print(f"[Chezmoi/uv] Dynamically attached venv environment for Python {py_version}")
 
     try:
-        # Check if python environment matches lockfile expectations
         check = subprocess.run(
-            [uv_bin, "pip", "check"], 
+            [uv_bin, "sync", "--check"], 
             cwd=project_dir, 
             capture_output=True
         )
@@ -124,7 +123,7 @@ def load_and_sync_chezmoi(dummy=None):
             # Display a quick non-blocking native alert popup box 
             bpy.context.window_manager.popup_menu(draw_popup, title="Environment Sync", icon='URL')
             
-            # Spin up background process so the viewport doesn't freeze during lock matching
+            # Spin up background process so the viewport doesn't freeze
             threading.Thread(target=run_background_sync, args=(uv_bin, project_dir), daemon=True).start()
         else:
             UV_STATUS = "OK"
