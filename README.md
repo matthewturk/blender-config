@@ -21,6 +21,15 @@ This config now includes a startup helper panel on mesh data properties called `
 
 Use `Sync Geometry Nodes Vertex Groups` when the evaluated result still matches the source mesh topology. Use `Bake Evaluated Copy` when the node tree fully replaces the input geometry and you want a real mesh object with real vertex groups, without the join/delete workaround.
 
+## Geometry Nodes Custom Vector Field Nodes
+
+Startup now also creates reusable Geometry Nodes group nodes that are authored from Python and can be inserted like custom nodes:
+
+- `GN Vector Field Warp`: normalizes a direction field, applies strength, and scales the resulting vector field by a bias-powered magnitude.
+- `GN Vector Field Project Twist`: projects a field onto an axis, generates an orthogonal twist component, and blends the transformed field with the original.
+
+These appear in the Geometry Nodes Add menu and can also be rebuilt manually with the operator `Ensure GN Custom Vector Field Groups`.
+
 ## Supported Config Keys
 
 In addition to render/device and asset library settings, the startup sync now supports:

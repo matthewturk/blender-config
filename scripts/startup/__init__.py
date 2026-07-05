@@ -1,4 +1,5 @@
 from . import chezmoi_sync
+from . import geonodes_custom_nodes
 from . import geonodes_vertex_groups
 from . import get_extension_keys
 
@@ -10,7 +11,7 @@ bl_info = {
     "blender": (5, 0, 0),
     "location": "Startup",
     "description": (
-        "Automated preference synchronization and extension tracking" " exporter."
+        "Automated preference synchronization and extension tracking " "exporter."
     ),
     "category": "System",
 }
@@ -19,6 +20,7 @@ bl_info = {
 def register():
     # Pass registration downstream to your sync logic
     chezmoi_sync.register()
+    geonodes_custom_nodes.register()
     geonodes_vertex_groups.register()
     get_extension_keys.register()
 
@@ -26,6 +28,7 @@ def register():
 def unregister():
     # Allow safe unregistering if needed
     chezmoi_sync.unregister()
+    geonodes_custom_nodes.unregister()
     geonodes_vertex_groups.unregister()
     get_extension_keys.unregister()
 
