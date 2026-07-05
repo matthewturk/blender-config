@@ -8,6 +8,19 @@ What I've set up is a `uv`-based system for installing packages that can be link
 
 It's working for now!
 
+## Geometry Nodes Vertex Group Sync
+
+Geometry Nodes still treats many weight-style results as attributes unless the original input geometry stays in the stream, which is why the common join/delete workaround preserves vertex groups.
+
+This config now includes a startup helper panel on mesh data properties called `Geometry Nodes Vertex Groups`. It can:
+
+- copy scalar point attributes from the evaluated Geometry Nodes result back onto the source object as real vertex groups
+- bake a new mesh object from the evaluated result when the node tree replaces the input geometry entirely
+- limit syncing to a comma-separated list of attribute names, or sync every scalar point attribute when left blank
+- auto-sync after depsgraph updates if you enable `Auto Sync`
+
+Use `Sync Geometry Nodes Vertex Groups` when the evaluated result still matches the source mesh topology. Use `Bake Evaluated Copy` when the node tree fully replaces the input geometry and you want a real mesh object with real vertex groups, without the join/delete workaround.
+
 ## Supported Config Keys
 
 In addition to render/device and asset library settings, the startup sync now supports:
