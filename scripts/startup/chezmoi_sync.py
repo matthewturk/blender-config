@@ -160,6 +160,9 @@ def load_and_sync_chezmoi(dummy=None):
         print(
             f"[Chezmoi/uv] Dynamically attached venv environment for Python {py_version}"
         )
+        print(
+            f"[Chezmoi/uv] That path is {uv_venv}"
+        )
 
     try:
         check = subprocess.run(
