@@ -11,6 +11,7 @@ name = "blender"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "databpy" },
     { name = "h5py" },
     { name = "matplotlib" },
     { name = "unyt" },
@@ -19,6 +20,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "databpy", specifier = ">=0.7.0" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "matplotlib", specifier = ">=3.11.0" },
     { name = "unyt", specifier = ">=3.1.0" },
@@ -109,6 +111,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a9/95/a3dbbb5028f35eafb79008e7522a75244477d2838f38cbb722248dabc2a8/cycler-0.12.1.tar.gz", hash = "sha256:88bb128f02ba341da8ef447245a9e138fae777f6a23943da4540077d3601eb1c", size = 7615, upload-time = "2023-10-07T05:32:18.335Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl", hash = "sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30", size = 8321, upload-time = "2023-10-07T05:32:16.783Z" },
+]
+
+[[package]]
+name = "databpy"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fe/31/d2e7e20ec233770aa171256c8674c8b0adf2215678e44739dc5377b9fe70/databpy-0.7.0.tar.gz", hash = "sha256:4fb689e0f8276d0bbc82ce5a68b01a7c84863a6c1b76d76261eef8c173c5b030", size = 59086, upload-time = "2026-03-05T07:17:09.391Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/d9/a87515baec6cc79afb0fbf5ff74fc55fadac736e19d8d75ba779d4e39dab/databpy-0.7.0-py3-none-any.whl", hash = "sha256:1bd84f944acaeaf043507bfddaec3681f15eac6849032c28045a07038679a9fa", size = 42581, upload-time = "2026-03-05T07:17:07.968Z" },
 ]
 
 [[package]]
