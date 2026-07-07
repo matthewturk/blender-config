@@ -8,6 +8,7 @@ dependencies = [
     "databpy>=0.7.0",
     "h5py>=3.16.0",
     "matplotlib>=3.11.0",
+    "pandas>=3.0.3",
     "unyt>=3.1.0",
     "yt>=4.4.2",
 ]
