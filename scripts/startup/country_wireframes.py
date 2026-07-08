@@ -1,6 +1,8 @@
 import math
 import json
 import datetime
+import os
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1110,6 +1112,50 @@ def _parse_osm_bbox(raw_text):
     return (south, west, north, east)
 
 
+def _bbox_area_deg2(south, west, north, east):
+    return max(0.0, north - south) * max(0.0, east - west)
+
+
+def _osm_preflight_messages(settings):
+    messages = []
+
+    south, west, north, east = _parse_osm_bbox(settings.osm_bbox)
+    area_deg2 = _bbox_area_deg2(south, west, north, east)
+
+    if area_deg2 > float(settings.osm_hard_bbox_area_deg2):
+        raise RuntimeError(
+            "OSM bbox is too large for safe import. "
+            f"Area={area_deg2:.3f} deg^2 exceeds hard limit "
+            f"{float(settings.osm_hard_bbox_area_deg2):.3f} deg^2."
+        )
+
+    if area_deg2 > float(settings.osm_warn_bbox_area_deg2):
+        messages.append(
+            "BBox area is large and may trigger heavy OSM server load "
+            f"({area_deg2:.3f} deg^2)."
+        )
+
+    if int(settings.osm_max_features) == 0:
+        messages.append(
+            "Max Features is 0 (unbounded). This can pull a very large dataset."
+        )
+    elif int(settings.osm_max_features) > 10000:
+        messages.append(f"Max Features is high ({int(settings.osm_max_features)}).")
+
+    if settings.osm_query_mode == "CUSTOM":
+        messages.append(
+            "Custom Overpass query is enabled; server-side scope may exceed UI caps."
+        )
+
+    if int(settings.osm_timeout_seconds) > 120:
+        messages.append(
+            f"Timeout is high ({int(settings.osm_timeout_seconds)}s), "
+            "indicating potentially heavy queries."
+        )
+
+    return messages
+
+
 def _parse_osm_tag_filters(raw_text):
     tokens = _tokenize_values(raw_text)
     parsed = []
@@ -1124,6 +1170,100 @@ def _parse_osm_tag_filters(raw_text):
             continue
         parsed.append((key, value if value else None))
     return parsed
+
+
+def _osm_tags_dict_from_filters(raw_text):
+    tags = {}
+    for key, value in _parse_osm_tag_filters(raw_text):
+        if value is None:
+            tags[key] = True
+            continue
+
+        existing = tags.get(key)
+        if existing is None or existing is True:
+            tags[key] = value
+            continue
+
+        if isinstance(existing, list):
+            if value not in existing:
+                existing.append(value)
+            continue
+
+        if existing != value:
+            tags[key] = [existing, value]
+
+    return tags
+
+
+def _osm_presets_map():
+    return {
+        "BUILDINGS": "building",
+        "ROADS": "highway",
+        "WATER": "waterway,natural=water",
+        "LANDUSE": "landuse,natural",
+        "POI": "amenity,shop,tourism",
+        "BOUNDARIES": "boundary=administrative",
+    }
+
+
+def _fetch_osm_geojson_with_osmnx(settings):
+    try:
+        import osmnx as ox
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not import osmnx. Install it in the Blender uv environment "
+            "to enable preset/tag-based OSM import."
+        ) from exc
+
+    south, west, north, east = _parse_osm_bbox(settings.osm_bbox)
+    tags = _osm_tags_dict_from_filters(settings.osm_tag_filters)
+    if not tags:
+        tags = {"building": True}
+
+    timeout_s = max(5, int(settings.osm_timeout_seconds))
+    try:
+        ox.settings.requests_timeout = timeout_s
+    except Exception:
+        pass
+
+    gdf = None
+    fetch_attempts = [
+        lambda: ox.features_from_bbox(north, south, east, west, tags),
+        lambda: ox.features.features_from_bbox((north, south, east, west), tags),
+        lambda: ox.features.features_from_bbox((west, south, east, north), tags),
+    ]
+
+    fetch_error = None
+    for attempt in fetch_attempts:
+        try:
+            gdf = attempt()
+            break
+        except Exception as exc:
+            fetch_error = exc
+
+    if gdf is None:
+        raise RuntimeError(f"osmnx fetch failed: {fetch_error}") from fetch_error
+
+    if gdf.empty:
+        return {
+            "type": "FeatureCollection",
+            "features": [],
+        }
+
+    max_features = int(settings.osm_max_features)
+    if max_features > 0 and len(gdf) > max_features:
+        gdf = gdf.head(max_features)
+
+    tolerance = float(settings.osm_simplify_tolerance_deg)
+    if tolerance > 0.0:
+        gdf = gdf.copy()
+        gdf.geometry = gdf.geometry.simplify(
+            tolerance,
+            preserve_topology=True,
+        )
+        gdf = gdf[gdf.geometry.notnull()]
+
+    return json.loads(gdf.to_json())
 
 
 def _build_overpass_query_from_settings(settings):
@@ -1143,9 +1283,9 @@ def _build_overpass_query_from_settings(settings):
     else:
         for key, value in filters:
             if value is None:
-                selector_lines.append(f"  nwr[\"{key}\"]{bbox};")
+                selector_lines.append(f'  nwr["{key}"]{bbox};')
             else:
-                selector_lines.append(f"  nwr[\"{key}\"=\"{value}\"]{bbox};")
+                selector_lines.append(f'  nwr["{key}"="{value}"]{bbox};')
 
     timeout_s = max(5, int(settings.osm_timeout_seconds))
     query = [f"[out:json][timeout:{timeout_s}];", "("]
@@ -1154,7 +1294,7 @@ def _build_overpass_query_from_settings(settings):
     return "\n".join(query)
 
 
-def _fetch_overpass_json(endpoint, query, timeout_seconds):
+def _fetch_overpass_json(endpoint, query, timeout_seconds, max_response_bytes):
     encoded = urllib.parse.urlencode({"data": query}).encode("utf-8")
     request = urllib.request.Request(
         endpoint,
@@ -1164,7 +1304,22 @@ def _fetch_overpass_json(endpoint, query, timeout_seconds):
 
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            content = response.read().decode("utf-8")
+            total = 0
+            chunks = []
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+
+                if total > max_response_bytes:
+                    raise RuntimeError(
+                        "Overpass response exceeded safety limit. "
+                        "Narrow bbox/tags or lower Max Features."
+                    )
+
+            content = b"".join(chunks).decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
         raise RuntimeError(
@@ -1192,6 +1347,61 @@ def _convert_overpass_to_geojson(overpass_json):
         return osm2geojson.json2geojson(overpass_json)
     except Exception as exc:
         raise RuntimeError(f"Failed converting OSM JSON to GeoJSON: {exc}") from exc
+
+
+def _download_url_to_temp_file(url, timeout_seconds, max_bytes):
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "BlenderGeoWireframes/1.0"},
+    )
+
+    fd, temp_path = tempfile.mkstemp(prefix="geo_download_", suffix=".img")
+    os.close(fd)
+
+    written = 0
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            with open(temp_path, "wb") as handle:
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise RuntimeError(
+                            "Remote image exceeds configured download limit "
+                            f"({max_bytes // (1024 * 1024)} MB)."
+                        )
+                    handle.write(chunk)
+    except Exception:
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        raise
+
+    return temp_path
+
+
+def _local_file_size_mb(path):
+    try:
+        size = os.path.getsize(path)
+    except Exception:
+        return 0.0
+    return float(size) / (1024.0 * 1024.0)
+
+
+def _raster_dimensions(path):
+    try:
+        import rasterio
+    except Exception:
+        return None
+
+    try:
+        with rasterio.open(path) as src:
+            return (int(src.width), int(src.height))
+    except Exception:
+        return None
 
 
 def _create_boundary_wire_object(
@@ -1240,6 +1450,164 @@ def _create_reference_globe(collection, radius, resolution):
         poly.use_smooth = True
     collection.objects.link(obj)
     return obj
+
+
+def _find_reference_globe_object():
+    direct = bpy.data.objects.get("GeoReferenceGlobe")
+    if direct is not None:
+        return direct
+    for obj in bpy.data.objects:
+        if obj.name.startswith("GeoReferenceGlobe"):
+            return obj
+    return None
+
+
+def _ensure_reference_globe(context, settings):
+    existing = _find_reference_globe_object()
+    if existing is not None:
+        return existing
+
+    root = _get_or_create_collection(context.scene.collection, "Geo Wireframes")
+    reference_coll = _get_or_create_collection(root, "Geo Reference")
+    return _create_reference_globe(
+        collection=reference_coll,
+        radius=settings.globe_radius,
+        resolution=settings.resolution,
+    )
+
+
+def _normalize_image_array(array):
+    try:
+        import numpy as np
+    except Exception as exc:
+        raise RuntimeError("Could not import numpy for raster conversion.") from exc
+
+    image = array.astype("float32", copy=False)
+    if image.ndim == 2:
+        image = np.stack([image, image, image], axis=-1)
+
+    if image.ndim == 3 and image.shape[-1] > 3:
+        image = image[:, :, :3]
+
+    finite_mask = np.isfinite(image)
+    if not finite_mask.any():
+        raise RuntimeError("Raster image contains no finite values.")
+
+    valid = image[finite_mask]
+    lo = float(np.percentile(valid, 2.0))
+    hi = float(np.percentile(valid, 98.0))
+    if hi <= lo:
+        lo = float(valid.min())
+        hi = float(valid.max())
+        if hi <= lo:
+            hi = lo + 1.0
+
+    image = (image - lo) / (hi - lo)
+    image = np.clip(image, 0.0, 1.0)
+    image[~finite_mask] = 0.0
+    return image
+
+
+def _convert_raster_to_png(source_path, max_size=4096):
+    try:
+        import numpy as np
+        import rasterio
+        from rasterio.enums import Resampling
+    except Exception as exc:
+        raise RuntimeError("Could not import rasterio for imagery conversion.") from exc
+
+    with rasterio.open(source_path) as src:
+        if src.count <= 0:
+            raise RuntimeError("Raster has no bands.")
+
+        scale = 1.0
+        if max(src.width, src.height) > max_size:
+            scale = max_size / float(max(src.width, src.height))
+
+        out_h = max(1, int(src.height * scale))
+        out_w = max(1, int(src.width * scale))
+        band_count = min(3, src.count)
+        data = src.read(
+            indexes=list(range(1, band_count + 1)),
+            out_shape=(band_count, out_h, out_w),
+            resampling=Resampling.bilinear,
+        )
+
+    image = np.moveaxis(data, 0, -1)
+    image = _normalize_image_array(image)
+
+    fd, target_path = tempfile.mkstemp(prefix="geo_texture_", suffix=".png")
+    os.close(fd)
+
+    try:
+        import matplotlib.pyplot as plt
+
+        plt.imsave(target_path, image)
+    except Exception as exc:
+        raise RuntimeError(f"Could not save converted raster image: {exc}") from exc
+
+    return target_path
+
+
+def _ensure_texture_material(material_name, image_path):
+    image = bpy.data.images.load(image_path, check_existing=True)
+    material = bpy.data.materials.get(material_name)
+    if material is None:
+        material = bpy.data.materials.new(material_name)
+
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    tex_coord.location = (-700, 0)
+
+    uv_map = nodes.new("ShaderNodeUVMap")
+    uv_map.uv_map = "GeoUV"
+    uv_map.location = (-700, -180)
+
+    image_tex = nodes.new("ShaderNodeTexImage")
+    image_tex.image = image
+    image_tex.interpolation = "Smart"
+    image_tex.location = (-420, 0)
+
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (-120, 0)
+
+    output = nodes.new("ShaderNodeOutputMaterial")
+    output.location = (160, 0)
+
+    uv_out = _socket_by_name(uv_map.outputs, "UV")
+    tex_vec = _socket_by_name(image_tex.inputs, "Vector")
+    tex_color = _socket_by_name(image_tex.outputs, "Color")
+    bsdf_base = _socket_by_name(bsdf.inputs, "Base Color")
+    bsdf_out = _socket_by_name(bsdf.outputs, "BSDF")
+    out_surface = _socket_by_name(output.inputs, "Surface")
+
+    if uv_out is not None and tex_vec is not None:
+        links.new(uv_out, tex_vec)
+    if tex_color is not None and bsdf_base is not None:
+        links.new(tex_color, bsdf_base)
+    if bsdf_out is not None and out_surface is not None:
+        links.new(bsdf_out, out_surface)
+
+    return material
+
+
+def _apply_texture_to_reference_globe(context, settings, image_path):
+    globe = _ensure_reference_globe(context, settings)
+    material = _ensure_texture_material("GeoReferenceGlobeMaterial", image_path)
+
+    if globe.data is None:
+        raise RuntimeError("Reference globe has no mesh data.")
+
+    if globe.data.materials:
+        globe.data.materials[0] = material
+    else:
+        globe.data.materials.append(material)
+
+    return globe
 
 
 def _sync_country_items_from_world(settings, world):
@@ -1801,16 +2169,39 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
     )
     osm_query_mode: bpy.props.EnumProperty(
         name="OSM Query",
-        description="Use generated bbox/tag query or paste a custom Overpass query",
+        description=(
+            "Use osmnx with bbox/tags or paste raw Overpass QL " "for advanced queries"
+        ),
         items=(
             (
                 "BBOX_TAGS",
-                "BBox + Tags",
-                "Build a query from bbox and tag filters",
+                "BBox + Tags (osmnx)",
+                "Use osmnx/geopandas for OSM features",
             ),
-            ("CUSTOM", "Custom", "Use raw Overpass QL"),
+            (
+                "CUSTOM",
+                "Custom Overpass",
+                "Use raw Overpass QL (fallback path)",
+            ),
         ),
         default="BBOX_TAGS",
+    )
+    osm_preset: bpy.props.EnumProperty(
+        name="Preset",
+        description="Populate common OSM tag filters",
+        items=(
+            ("BUILDINGS", "Buildings", "Building footprints and parts"),
+            ("ROADS", "Roads", "Road network and paths"),
+            ("WATER", "Water", "Waterways and water bodies"),
+            ("LANDUSE", "Landuse", "Landuse and natural areas"),
+            ("POI", "POIs", "Amenities, shops, and tourism points"),
+            (
+                "BOUNDARIES",
+                "Boundaries",
+                "Administrative and political boundaries",
+            ),
+        ),
+        default="BUILDINGS",
     )
     osm_endpoint: bpy.props.StringProperty(
         name="Overpass Endpoint",
@@ -1824,15 +2215,59 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
         min=5,
         max=600,
     )
+    osm_require_confirmation: bpy.props.BoolProperty(
+        name="Confirm Large OSM Requests",
+        description="Prompt before potentially large OSM imports",
+        default=True,
+    )
     osm_bbox: bpy.props.StringProperty(
         name="BBox",
         description="south,west,north,east in WGS84 degrees",
         default="40.70,-74.03,40.75,-73.96",
     )
+    osm_warn_bbox_area_deg2: bpy.props.FloatProperty(
+        name="Warn Area (deg^2)",
+        description="Show confirmation when bbox area exceeds this threshold",
+        default=0.25,
+        min=0.001,
+        max=100.0,
+        precision=3,
+    )
+    osm_hard_bbox_area_deg2: bpy.props.FloatProperty(
+        name="Hard Area Limit (deg^2)",
+        description="Abort imports above this bbox area",
+        default=2.0,
+        min=0.01,
+        max=1000.0,
+        precision=3,
+    )
     osm_tag_filters: bpy.props.StringProperty(
         name="Tag Filters",
         description="Comma-separated tags, e.g. building, highway=primary",
         default="building",
+    )
+    osm_max_features: bpy.props.IntProperty(
+        name="Max Features",
+        description="Hard cap on imported OSM features (0 disables cap)",
+        default=2000,
+        min=0,
+        max=200000,
+    )
+    osm_simplify_tolerance_deg: bpy.props.FloatProperty(
+        name="Simplify Tol (deg)",
+        description="Pre-simplify OSM geometries in lon/lat before projection",
+        default=0.0004,
+        min=0.0,
+        max=1.0,
+        step=0.1,
+        precision=6,
+    )
+    osm_max_response_mb: bpy.props.IntProperty(
+        name="Max Response (MB)",
+        description="Abort if Overpass response exceeds this size",
+        default=64,
+        min=5,
+        max=1024,
     )
     osm_custom_query: bpy.props.StringProperty(
         name="Overpass QL",
@@ -1840,10 +2275,51 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
         default=(
             "[out:json][timeout:45];\n"
             "(\n"
-            "  nwr[\"building\"](40.70,-74.03,40.75,-73.96);\n"
+            '  nwr["building"](40.70,-74.03,40.75,-73.96);\n'
             ");\n"
             "out body geom;"
         ),
+    )
+    imagery_blue_marble_url: bpy.props.StringProperty(
+        name="Blue Marble URL",
+        description="Open equirectangular Earth image URL",
+        default=(
+            "https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/"
+            "74117/world.topo.bathy.200412.3x5400x2700.jpg"
+        ),
+    )
+    imagery_max_size: bpy.props.IntProperty(
+        name="Imagery Max Size",
+        description="Maximum pixel dimension when converting raster imagery",
+        default=4096,
+        min=512,
+        max=16384,
+    )
+    imagery_require_confirmation: bpy.props.BoolProperty(
+        name="Confirm Remote Imagery Downloads",
+        description="Prompt before downloading remote imagery",
+        default=True,
+    )
+    imagery_max_download_mb: bpy.props.IntProperty(
+        name="Max Remote Download (MB)",
+        description="Abort if remote imagery exceeds this size",
+        default=64,
+        min=1,
+        max=2048,
+    )
+    imagery_max_local_file_mb: bpy.props.IntProperty(
+        name="Max Local File (MB)",
+        description="Abort local imagery import if file exceeds this size",
+        default=2048,
+        min=10,
+        max=65536,
+    )
+    imagery_max_source_pixels: bpy.props.IntProperty(
+        name="Max Source Pixels",
+        description="Abort if source raster dimensions exceed this many pixels",
+        default=50000000,
+        min=1000000,
+        max=1000000000,
     )
     country_items: bpy.props.CollectionProperty(type=GeoCountryListItem)
     country_index: bpy.props.IntProperty(default=0)
@@ -1902,28 +2378,76 @@ class OBJECT_OT_import_geojson_wireframes(bpy.types.Operator, ImportHelper):
         return {"FINISHED"}
 
 
+class OBJECT_OT_apply_osm_preset(bpy.types.Operator):
+    bl_idname = "object.apply_osm_preset"
+    bl_label = "Apply OSM Preset"
+    bl_description = "Fill OSM tag filters from preset"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        settings = context.scene.country_wireframe_settings
+        mapping = _osm_presets_map()
+        tag_filter = mapping.get(settings.osm_preset, "building")
+        settings.osm_tag_filters = tag_filter
+        self.report({"INFO"}, f"OSM preset applied: {tag_filter}")
+        return {"FINISHED"}
+
+
 class OBJECT_OT_import_osm_overpass(bpy.types.Operator):
     bl_idname = "object.import_osm_overpass"
     bl_label = "Import OSM (Overpass)"
     bl_description = "Fetch OSM data through Overpass, convert to GeoJSON, and import"
     bl_options = {"REGISTER", "UNDO"}
 
+    preflight_warning: bpy.props.StringProperty(default="", options={"HIDDEN"})
+
+    def invoke(self, context, _event):
+        settings = context.scene.country_wireframe_settings
+        try:
+            warnings = _osm_preflight_messages(settings)
+        except Exception as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        if settings.osm_require_confirmation and warnings:
+            self.preflight_warning = "\n".join(warnings)
+            return context.window_manager.invoke_props_dialog(self, width=560)
+
+        self.preflight_warning = ""
+        return self.execute(context)
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.label(text="Potentially heavy OSM request", icon="ERROR")
+        for line in self.preflight_warning.split("\n"):
+            line = line.strip()
+            if line:
+                layout.label(text=line)
+        layout.separator()
+        layout.label(text="Press OK to continue, or Cancel to adjust limits.")
+
     def execute(self, context):
         settings = context.scene.country_wireframe_settings
 
-        endpoint = str(settings.osm_endpoint).strip()
-        if not endpoint:
-            self.report({"ERROR"}, "OSM endpoint is empty.")
-            return {"CANCELLED"}
-
         try:
-            query = _build_overpass_query_from_settings(settings)
-            overpass_json = _fetch_overpass_json(
-                endpoint,
-                query,
-                max(5, int(settings.osm_timeout_seconds)),
-            )
-            geojson = _convert_overpass_to_geojson(overpass_json)
+            if settings.osm_query_mode == "CUSTOM":
+                endpoint = str(settings.osm_endpoint).strip()
+                if not endpoint:
+                    raise RuntimeError("OSM endpoint is empty.")
+
+                query = _build_overpass_query_from_settings(settings)
+                overpass_json = _fetch_overpass_json(
+                    endpoint,
+                    query,
+                    max(5, int(settings.osm_timeout_seconds)),
+                    max(1, int(settings.osm_max_response_mb)) * 1024 * 1024,
+                )
+                geojson = _convert_overpass_to_geojson(overpass_json)
+                source_label = f"overpass:{endpoint}"
+            else:
+                geojson = _fetch_osm_geojson_with_osmnx(settings)
+                source_label = "osmnx"
+
             payload = _load_geojson_feature_payload_from_data(geojson)
         except Exception as exc:
             print(f"[Geo Wireframes][OSM Diagnostic] {exc}")
@@ -1938,7 +2462,7 @@ class OBJECT_OT_import_osm_overpass(bpy.types.Operator):
             context,
             settings,
             payload,
-            f"overpass:{endpoint}",
+            source_label,
         )
 
         self.report(
@@ -1948,6 +2472,128 @@ class OBJECT_OT_import_osm_overpass(bpy.types.Operator):
                 f"{points_created} point marker(s)."
             ),
         )
+        return {"FINISHED"}
+
+
+class OBJECT_OT_apply_blue_marble_texture(bpy.types.Operator):
+    bl_idname = "object.apply_blue_marble_texture"
+    bl_label = "Apply Blue Marble"
+    bl_description = "Download and apply NASA Blue Marble texture to reference globe"
+    bl_options = {"REGISTER", "UNDO"}
+
+    preflight_warning: bpy.props.StringProperty(default="", options={"HIDDEN"})
+
+    def invoke(self, context, _event):
+        settings = context.scene.country_wireframe_settings
+        url = str(settings.imagery_blue_marble_url).strip()
+        if not url:
+            self.report({"ERROR"}, "Blue Marble URL is empty.")
+            return {"CANCELLED"}
+
+        if settings.imagery_require_confirmation:
+            self.preflight_warning = (
+                "This downloads a remote image into Blender's main process. "
+                f"Max allowed download is {int(settings.imagery_max_download_mb)} MB."
+            )
+            return context.window_manager.invoke_props_dialog(self, width=560)
+
+        self.preflight_warning = ""
+        return self.execute(context)
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.label(text="Remote imagery download", icon="INFO")
+        layout.label(text=self.preflight_warning)
+        layout.separator()
+        layout.label(text="Press OK to continue, or Cancel to adjust limits.")
+
+    def execute(self, context):
+        settings = context.scene.country_wireframe_settings
+        url = str(settings.imagery_blue_marble_url).strip()
+        if not url:
+            self.report({"ERROR"}, "Blue Marble URL is empty.")
+            return {"CANCELLED"}
+
+        try:
+            temp_path = _download_url_to_temp_file(
+                url,
+                timeout_seconds=max(5, int(settings.osm_timeout_seconds)),
+                max_bytes=max(1, int(settings.imagery_max_download_mb)) * 1024 * 1024,
+            )
+            globe = _apply_texture_to_reference_globe(context, settings, temp_path)
+        except Exception as exc:
+            self.report({"ERROR"}, f"Failed applying Blue Marble texture: {exc}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Blue Marble texture applied to '{globe.name}'.")
+        return {"FINISHED"}
+
+
+class OBJECT_OT_apply_texture_from_raster(bpy.types.Operator, ImportHelper):
+    bl_idname = "object.apply_texture_from_raster"
+    bl_label = "Apply Texture From Raster"
+    bl_description = "Convert local raster/image and apply as globe texture"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filename_ext = ".tif"
+    filter_glob: bpy.props.StringProperty(
+        default="*.tif;*.tiff;*.png;*.jpg;*.jpeg;*.webp",
+        options={"HIDDEN"},
+    )
+
+    def execute(self, context):
+        settings = context.scene.country_wireframe_settings
+        source_path = self.filepath
+        if not source_path:
+            self.report({"ERROR"}, "No image/raster file selected.")
+            return {"CANCELLED"}
+
+        size_mb = _local_file_size_mb(source_path)
+        if size_mb > float(settings.imagery_max_local_file_mb):
+            self.report(
+                {"ERROR"},
+                (
+                    "Source file is too large: "
+                    f"{size_mb:.1f} MB > {int(settings.imagery_max_local_file_mb)} MB"
+                ),
+            )
+            return {"CANCELLED"}
+
+        lower = source_path.lower()
+        try:
+            if lower.endswith((".tif", ".tiff")):
+                dims = _raster_dimensions(source_path)
+                if dims is not None:
+                    width, height = dims
+                    total_pixels = width * height
+                    if total_pixels > int(settings.imagery_max_source_pixels):
+                        self.report(
+                            {"ERROR"},
+                            (
+                                "Source raster is too large: "
+                                f"{total_pixels} pixels exceeds "
+                                f"{int(settings.imagery_max_source_pixels)}"
+                            ),
+                        )
+                        return {"CANCELLED"}
+
+                texture_path = _convert_raster_to_png(
+                    source_path,
+                    max_size=max(512, int(settings.imagery_max_size)),
+                )
+            else:
+                texture_path = source_path
+
+            globe = _apply_texture_to_reference_globe(
+                context,
+                settings,
+                texture_path,
+            )
+        except Exception as exc:
+            self.report({"ERROR"}, f"Failed applying texture: {exc}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Texture applied to '{globe.name}'.")
         return {"FINISHED"}
 
 
@@ -2316,17 +2962,42 @@ class VIEW3D_PT_country_wireframes(bpy.types.Panel):
 
         osm_box = layout.box()
         osm_box.label(text="OSM Import")
+        row = osm_box.row(align=True)
+        row.prop(settings, "osm_preset")
+        row.operator("object.apply_osm_preset", text="Apply", icon="PRESET")
         osm_box.prop(settings, "osm_query_mode")
-        osm_box.prop(settings, "osm_endpoint")
         osm_box.prop(settings, "osm_timeout_seconds")
+        osm_box.prop(settings, "osm_require_confirmation")
+        osm_box.prop(settings, "osm_bbox")
+        osm_box.prop(settings, "osm_warn_bbox_area_deg2")
+        osm_box.prop(settings, "osm_hard_bbox_area_deg2")
+        osm_box.prop(settings, "osm_tag_filters")
+        osm_box.prop(settings, "osm_max_features")
+        osm_box.prop(settings, "osm_simplify_tolerance_deg")
+        osm_box.prop(settings, "osm_max_response_mb")
         if settings.osm_query_mode == "CUSTOM":
+            osm_box.prop(settings, "osm_endpoint")
             osm_box.prop(settings, "osm_custom_query")
-        else:
-            osm_box.prop(settings, "osm_bbox")
-            osm_box.prop(settings, "osm_tag_filters")
         osm_box.operator(
             "object.import_osm_overpass",
             icon="URL",
+        )
+
+        imagery_box = layout.box()
+        imagery_box.label(text="Imagery")
+        imagery_box.prop(settings, "imagery_blue_marble_url")
+        imagery_box.prop(settings, "imagery_max_size")
+        imagery_box.prop(settings, "imagery_require_confirmation")
+        imagery_box.prop(settings, "imagery_max_download_mb")
+        imagery_box.prop(settings, "imagery_max_local_file_mb")
+        imagery_box.prop(settings, "imagery_max_source_pixels")
+        imagery_box.operator(
+            "object.apply_blue_marble_texture",
+            icon="IMAGE_DATA",
+        )
+        imagery_box.operator(
+            "object.apply_texture_from_raster",
+            icon="FILE_IMAGE",
         )
 
         utility_box = layout.box()
@@ -2345,7 +3016,10 @@ CLASSES = (
     OBJECT_OT_select_none_geo_countries,
     CountryWireframeSettings,
     OBJECT_OT_import_geojson_wireframes,
+    OBJECT_OT_apply_osm_preset,
     OBJECT_OT_import_osm_overpass,
+    OBJECT_OT_apply_blue_marble_texture,
+    OBJECT_OT_apply_texture_from_raster,
     OBJECT_OT_create_country_wireframes,
     OBJECT_OT_build_geo_nodes_source,
     VIEW3D_PT_country_wireframes,
