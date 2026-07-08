@@ -11,6 +11,11 @@ import bpy
 import bmesh
 from bpy_extras.io_utils import ImportHelper
 
+_LEGACY_BLUE_MARBLE_URL = (
+    "https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/"
+    "74117/world.topo.bathy.200412.3x5400x2700.jpg"
+)
+
 
 def _as_text(value):
     if isinstance(value, str):
@@ -181,6 +186,91 @@ def _load_geo_data():
         }
 
     return world, countries_by_key, continents
+
+
+def _blue_marble_fallback_path():
+    return os.path.join(tempfile.gettempdir(), "blender_geo_blue_marble.png")
+
+
+def _file_url_from_path(path):
+    absolute = os.path.abspath(path)
+    return urllib.parse.urljoin("file:", urllib.request.pathname2url(absolute))
+
+
+def _blue_marble_fallback_url():
+    return _file_url_from_path(_blue_marble_fallback_path())
+
+
+def _ensure_blue_marble_fallback_texture():
+    target_path = _blue_marble_fallback_path()
+    if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+        return target_path
+
+    world, _, _ = _load_geo_data()
+
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not import matplotlib/numpy for Blue Marble fallback generation."
+        ) from exc
+
+    width = 3072
+    height = width // 2
+    x = np.linspace(-1.0, 1.0, width, dtype=float)[None, :]
+    y = np.linspace(-1.0, 1.0, height, dtype=float)[:, None]
+
+    ocean = np.zeros((height, width, 3), dtype=float)
+    ocean[..., 0] = 0.02 + 0.04 * (1.0 - y * y)
+    ocean[..., 1] = 0.18 + 0.18 * (1.0 - np.abs(y))
+    ocean[..., 2] = 0.32 + 0.35 * (1.0 - 0.45 * np.abs(y) + 0.1 * np.cos(np.pi * x))
+    ocean = np.clip(ocean, 0.0, 1.0)
+
+    fig = plt.figure(figsize=(12, 6), dpi=256)
+    ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+    fig.patch.set_facecolor((0.02, 0.10, 0.20))
+    ax.set_facecolor((0.02, 0.10, 0.20))
+    ax.imshow(ocean, extent=[-180, 180, -90, 90], origin="lower")
+    ax.fill_between([-180, 180], 72, 90, color="#f3f7fb", alpha=0.9)
+    ax.fill_between([-180, 180], -90, -72, color="#eef4fa", alpha=0.85)
+    world.plot(
+        ax=ax,
+        color="#6f9f58",
+        edgecolor="#d8d3b2",
+        linewidth=0.25,
+        zorder=3,
+    )
+    world.boundary.plot(ax=ax, color="#36543a", linewidth=0.2, zorder=4)
+    ax.set_xlim(-180, 180)
+    ax.set_ylim(-90, 90)
+    ax.axis("off")
+
+    fd, temp_path = tempfile.mkstemp(prefix="geo_blue_marble_", suffix=".png")
+    os.close(fd)
+    try:
+        fig.savefig(temp_path, dpi=256, facecolor=fig.get_facecolor())
+        os.replace(temp_path, target_path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not generate Blue Marble fallback texture: {exc}"
+        ) from exc
+    finally:
+        plt.close(fig)
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+    return target_path
+
+
+def _resolve_blue_marble_url(raw_url):
+    url = str(raw_url).strip()
+    if not url or url == _LEGACY_BLUE_MARBLE_URL or url == _blue_marble_fallback_url():
+        return _file_url_from_path(_ensure_blue_marble_fallback_texture())
+    return url
 
 
 def _latlon_to_xyz(lat_deg, lon_deg, radius):
@@ -2282,11 +2372,8 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
     )
     imagery_blue_marble_url: bpy.props.StringProperty(
         name="Blue Marble URL",
-        description="Open equirectangular Earth image URL",
-        default=(
-            "https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/"
-            "74117/world.topo.bathy.200412.3x5400x2700.jpg"
-        ),
+        description="Open equirectangular Earth image URL or file URL",
+        default=_blue_marble_fallback_url(),
     )
     imagery_max_size: bpy.props.IntProperty(
         name="Imagery Max Size",
@@ -2485,10 +2572,13 @@ class OBJECT_OT_apply_blue_marble_texture(bpy.types.Operator):
 
     def invoke(self, context, _event):
         settings = context.scene.country_wireframe_settings
-        url = str(settings.imagery_blue_marble_url).strip()
-        if not url:
-            self.report({"ERROR"}, "Blue Marble URL is empty.")
+        try:
+            url = _resolve_blue_marble_url(settings.imagery_blue_marble_url)
+        except Exception as exc:
+            self.report({"ERROR"}, f"Blue Marble texture source is unavailable: {exc}")
             return {"CANCELLED"}
+
+        settings.imagery_blue_marble_url = url
 
         if settings.imagery_require_confirmation:
             self.preflight_warning = (
@@ -2509,10 +2599,13 @@ class OBJECT_OT_apply_blue_marble_texture(bpy.types.Operator):
 
     def execute(self, context):
         settings = context.scene.country_wireframe_settings
-        url = str(settings.imagery_blue_marble_url).strip()
-        if not url:
-            self.report({"ERROR"}, "Blue Marble URL is empty.")
+        try:
+            url = _resolve_blue_marble_url(settings.imagery_blue_marble_url)
+        except Exception as exc:
+            self.report({"ERROR"}, f"Blue Marble texture source is unavailable: {exc}")
             return {"CANCELLED"}
+
+        settings.imagery_blue_marble_url = url
 
         try:
             temp_path = _download_url_to_temp_file(
