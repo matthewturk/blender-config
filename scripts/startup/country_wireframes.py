@@ -1,7 +1,10 @@
 import math
+import json
+import datetime
 
 import bpy
 import bmesh
+from bpy_extras.io_utils import ImportHelper
 
 
 def _as_text(value):
@@ -185,6 +188,320 @@ def _latlon_to_xyz(lat_deg, lon_deg, radius):
     return (x, y, z)
 
 
+def _normalize_vec3(vec):
+    length = math.sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2])
+    if length <= 1e-12:
+        return (0.0, 0.0, 1.0)
+    return (vec[0] / length, vec[1] / length, vec[2] / length)
+
+
+def _dot3(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross3(a, b):
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _slerp_unit(a, b, t):
+    dot = max(-1.0, min(1.0, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))
+
+    # For nearly parallel vectors, linear interpolation is more stable.
+    if dot > 0.9995:
+        blended = (
+            (1.0 - t) * a[0] + t * b[0],
+            (1.0 - t) * a[1] + t * b[1],
+            (1.0 - t) * a[2] + t * b[2],
+        )
+        return _normalize_vec3(blended)
+
+    omega = math.acos(dot)
+    sin_omega = math.sin(omega)
+    if abs(sin_omega) <= 1e-12:
+        return a
+
+    scale_a = math.sin((1.0 - t) * omega) / sin_omega
+    scale_b = math.sin(t * omega) / sin_omega
+    return (
+        scale_a * a[0] + scale_b * b[0],
+        scale_a * a[1] + scale_b * b[1],
+        scale_a * a[2] + scale_b * b[2],
+    )
+
+
+def _latlon_to_unit(lat_deg, lon_deg):
+    lat = math.radians(lat_deg)
+    lon = math.radians(lon_deg)
+    cos_lat = math.cos(lat)
+    return (cos_lat * math.cos(lon), cos_lat * math.sin(lon), math.sin(lat))
+
+
+def _line_coords_to_xyz(coords, globe_radius, max_segment_deg=0.0):
+    if not coords:
+        return []
+
+    try:
+        lon0, lat0, *_ = coords[0]
+    except Exception:
+        return []
+
+    points = [_latlon_to_xyz(lat0, lon0, globe_radius)]
+    prev_unit = _latlon_to_unit(lat0, lon0)
+
+    for coord in coords[1:]:
+        try:
+            lon1, lat1, *_ = coord
+        except Exception:
+            continue
+
+        curr_unit = _latlon_to_unit(lat1, lon1)
+        dot = max(
+            -1.0,
+            min(
+                1.0,
+                prev_unit[0] * curr_unit[0]
+                + prev_unit[1] * curr_unit[1]
+                + prev_unit[2] * curr_unit[2],
+            ),
+        )
+        arc_deg = math.degrees(math.acos(dot))
+
+        segments = 1
+        if max_segment_deg > 0.0 and arc_deg > max_segment_deg:
+            segments = int(math.ceil(arc_deg / max_segment_deg))
+
+        for step in range(1, segments + 1):
+            t = step / segments
+            unit = _slerp_unit(prev_unit, curr_unit, t)
+            points.append(
+                (
+                    unit[0] * globe_radius,
+                    unit[1] * globe_radius,
+                    unit[2] * globe_radius,
+                )
+            )
+
+        prev_unit = curr_unit
+
+    return points
+
+
+def _coords_lonlat_equal(coord_a, coord_b, epsilon=1e-12):
+    try:
+        lon_a, lat_a, *_ = coord_a
+        lon_b, lat_b, *_ = coord_b
+    except Exception:
+        return False
+    return abs(lon_a - lon_b) <= epsilon and abs(lat_a - lat_b) <= epsilon
+
+
+def _points_xyz_equal(point_a, point_b, epsilon=1e-8):
+    return (
+        abs(point_a[0] - point_b[0]) <= epsilon
+        and abs(point_a[1] - point_b[1]) <= epsilon
+        and abs(point_a[2] - point_b[2]) <= epsilon
+    )
+
+
+def _point_segment_angular_distance_deg(point, seg_start, seg_end):
+    a = _normalize_vec3(seg_start)
+    b = _normalize_vec3(seg_end)
+    p = _normalize_vec3(point)
+
+    ab_dot = max(-1.0, min(1.0, _dot3(a, b)))
+    ab_angle = math.acos(ab_dot)
+    if ab_angle <= 1e-12:
+        ap_dot = max(-1.0, min(1.0, _dot3(a, p)))
+        return math.degrees(math.acos(ap_dot))
+
+    n = _cross3(a, b)
+    n_len = math.sqrt(_dot3(n, n))
+    if n_len <= 1e-12:
+        ap_dot = max(-1.0, min(1.0, _dot3(a, p)))
+        bp_dot = max(-1.0, min(1.0, _dot3(b, p)))
+        return min(
+            math.degrees(math.acos(ap_dot)),
+            math.degrees(math.acos(bp_dot)),
+        )
+
+    n_hat = (n[0] / n_len, n[1] / n_len, n[2] / n_len)
+    projection = (
+        p[0] - _dot3(p, n_hat) * n_hat[0],
+        p[1] - _dot3(p, n_hat) * n_hat[1],
+        p[2] - _dot3(p, n_hat) * n_hat[2],
+    )
+    q = _normalize_vec3(projection)
+
+    aq = math.acos(max(-1.0, min(1.0, _dot3(a, q))))
+    qb = math.acos(max(-1.0, min(1.0, _dot3(q, b))))
+
+    on_arc = abs((aq + qb) - ab_angle) <= 1e-5
+    if on_arc:
+        pq_dot = max(-1.0, min(1.0, _dot3(p, q)))
+        return math.degrees(math.acos(pq_dot))
+
+    ap_dot = max(-1.0, min(1.0, _dot3(a, p)))
+    bp_dot = max(-1.0, min(1.0, _dot3(b, p)))
+    return min(
+        math.degrees(math.acos(ap_dot)),
+        math.degrees(math.acos(bp_dot)),
+    )
+
+
+def _point_segment_distance_2d(point, seg_start, seg_end):
+    px, py = point
+    ax, ay = seg_start
+    bx, by = seg_end
+
+    dx = bx - ax
+    dy = by - ay
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 1e-18:
+        return math.hypot(px - ax, py - ay)
+
+    t = ((px - ax) * dx + (py - ay) * dy) / length_sq
+    t = max(0.0, min(1.0, t))
+    cx = ax + t * dx
+    cy = ay + t * dy
+    return math.hypot(px - cx, py - cy)
+
+
+def _simplify_line_coords(coords, tolerance_deg):
+    if tolerance_deg <= 0.0 or len(coords) <= 2:
+        return list(coords)
+
+    is_closed = len(coords) > 3 and _coords_lonlat_equal(coords[0], coords[-1])
+    working = list(coords[:-1]) if is_closed else list(coords)
+    if len(working) <= 2:
+        return list(coords)
+
+    line2d = []
+    for coord in working:
+        try:
+            lon, lat, *_ = coord
+        except Exception:
+            return list(coords)
+        line2d.append((float(lon), float(lat)))
+
+    keep = [False] * len(working)
+    keep[0] = True
+    keep[-1] = True
+    stack = [(0, len(working) - 1)]
+
+    while stack:
+        start_idx, end_idx = stack.pop()
+        max_dist = -1.0
+        max_idx = -1
+
+        start_pt = line2d[start_idx]
+        end_pt = line2d[end_idx]
+        for idx in range(start_idx + 1, end_idx):
+            dist = _point_segment_distance_2d(line2d[idx], start_pt, end_pt)
+            if dist > max_dist:
+                max_dist = dist
+                max_idx = idx
+
+        if max_idx >= 0 and max_dist > tolerance_deg:
+            keep[max_idx] = True
+            if max_idx - start_idx > 1:
+                stack.append((start_idx, max_idx))
+            if end_idx - max_idx > 1:
+                stack.append((max_idx, end_idx))
+
+    simplified = [coord for idx, coord in enumerate(working) if keep[idx]]
+    if len(simplified) < 2:
+        simplified = [working[0], working[-1]]
+
+    if is_closed:
+        if len(simplified) < 3:
+            simplified = working[:3]
+        simplified.append(simplified[0])
+
+    return simplified
+
+
+def _simplify_lines(lines, tolerance_deg):
+    if tolerance_deg <= 0.0:
+        return [list(line) for line in lines]
+
+    simplified = []
+    for line in lines:
+        reduced = _simplify_line_coords(line, tolerance_deg)
+        if len(reduced) >= 2:
+            simplified.append(reduced)
+    return simplified
+
+
+def _simplify_spherical_points(points, tolerance_deg):
+    if tolerance_deg <= 0.0 or len(points) <= 2:
+        return list(points)
+
+    is_closed = len(points) > 3 and _points_xyz_equal(points[0], points[-1])
+    working = list(points[:-1]) if is_closed else list(points)
+    if len(working) <= 2:
+        return list(points)
+
+    keep = [False] * len(working)
+    keep[0] = True
+    keep[-1] = True
+    stack = [(0, len(working) - 1)]
+
+    while stack:
+        start_idx, end_idx = stack.pop()
+        max_dist = -1.0
+        max_idx = -1
+
+        start_pt = working[start_idx]
+        end_pt = working[end_idx]
+        for idx in range(start_idx + 1, end_idx):
+            dist = _point_segment_angular_distance_deg(
+                working[idx],
+                start_pt,
+                end_pt,
+            )
+            if dist > max_dist:
+                max_dist = dist
+                max_idx = idx
+
+        if max_idx >= 0 and max_dist > tolerance_deg:
+            keep[max_idx] = True
+            if max_idx - start_idx > 1:
+                stack.append((start_idx, max_idx))
+            if end_idx - max_idx > 1:
+                stack.append((max_idx, end_idx))
+
+    simplified = [point for idx, point in enumerate(working) if keep[idx]]
+    if len(simplified) < 2:
+        simplified = [working[0], working[-1]]
+
+    if is_closed:
+        if len(simplified) < 3:
+            simplified = working[:3]
+        simplified.append(simplified[0])
+
+    return simplified
+
+
+def _line_coords_to_simplified_xyz(
+    coords,
+    globe_radius,
+    max_segment_deg=0.0,
+    spherical_tolerance_deg=0.0,
+):
+    points = _line_coords_to_xyz(
+        coords,
+        globe_radius,
+        max_segment_deg=max_segment_deg,
+    )
+    if spherical_tolerance_deg > 0.0:
+        points = _simplify_spherical_points(points, spherical_tolerance_deg)
+    return points
+
+
 def _to_uv(lat_deg, lon_deg):
     u = (lon_deg + 180.0) / 360.0
     v = (lat_deg + 90.0) / 180.0
@@ -199,6 +516,39 @@ def _get_or_create_collection(parent, name):
     elif existing.name not in parent.children:
         parent.children.link(existing)
     return existing
+
+
+def _get_child_collection(parent, name):
+    for child in parent.children:
+        if child.name == name:
+            return child
+    return None
+
+
+def _unique_collection_name(base_name):
+    if bpy.data.collections.get(base_name) is None:
+        return base_name
+
+    index = 1
+    while True:
+        candidate = f"{base_name}.{index:03d}"
+        if bpy.data.collections.get(candidate) is None:
+            return candidate
+        index += 1
+
+
+def _archive_geojson_imports(root, imports_coll):
+    archive_parent = _get_or_create_collection(root, "GeoJSON Archive")
+    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    archived_name = _unique_collection_name(f"GeoJSON Imports {stamp}")
+    imports_coll.name = archived_name
+
+    if imports_coll.name not in archive_parent.children:
+        archive_parent.children.link(imports_coll)
+    if imports_coll.name in root.children:
+        root.children.unlink(imports_coll)
+
+    return archived_name
 
 
 def _build_sphere_mesh(
@@ -257,28 +607,161 @@ def _iter_line_coords(geom):
         yield from _iter_line_coords(geom.boundary)
 
 
-def _create_boundary_wire_object(
+def _iter_geojson_line_coords(geometry):
+    if not isinstance(geometry, dict):
+        return
+
+    gtype = str(geometry.get("type", ""))
+    coords = geometry.get("coordinates")
+
+    if gtype == "LineString" and isinstance(coords, list):
+        yield coords
+        return
+
+    if gtype == "MultiLineString" and isinstance(coords, list):
+        for line in coords:
+            if isinstance(line, list):
+                yield line
+        return
+
+    if gtype == "Polygon" and isinstance(coords, list):
+        for ring in coords:
+            if isinstance(ring, list):
+                yield ring
+        return
+
+    if gtype == "MultiPolygon" and isinstance(coords, list):
+        for polygon in coords:
+            if not isinstance(polygon, list):
+                continue
+            for ring in polygon:
+                if isinstance(ring, list):
+                    yield ring
+        return
+
+    if gtype == "GeometryCollection":
+        for sub in geometry.get("geometries", []):
+            yield from _iter_geojson_line_coords(sub)
+
+
+def _feature_name_from_properties(properties, fallback):
+    if not isinstance(properties, dict):
+        return fallback
+
+    candidates = (
+        "name",
+        "NAME",
+        "Name",
+        "admin",
+        "ADMIN",
+        "id",
+        "ID",
+    )
+    for key in candidates:
+        value = properties.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return fallback
+
+
+def _safe_object_name(text, fallback="Feature"):
+    value = str(text).strip()
+    if not value:
+        value = fallback
+
+    cleaned = []
+    for ch in value:
+        if ch.isalnum() or ch in {"_", "-", " ", "."}:
+            cleaned.append(ch)
+        else:
+            cleaned.append("_")
+
+    name = "".join(cleaned).strip()
+    if not name:
+        name = fallback
+    return name[:63]
+
+
+def _clear_collection_recursive(collection):
+    for child in list(collection.children):
+        _clear_collection_recursive(child)
+        bpy.data.collections.remove(child)
+
+    for obj in list(collection.objects):
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+
+def _load_geojson_features(file_path):
+    with open(file_path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    features = []
+
+    def _append_feature(geometry, properties, fallback_name):
+        if not isinstance(geometry, dict):
+            return
+        lines = [line for line in _iter_geojson_line_coords(geometry) if len(line) >= 2]
+        if not lines:
+            return
+        features.append(
+            {
+                "name": _feature_name_from_properties(properties, fallback_name),
+                "properties": properties if isinstance(properties, dict) else {},
+                "lines": lines,
+            }
+        )
+
+    if isinstance(data, dict) and data.get("type") == "FeatureCollection":
+        for idx, feature in enumerate(data.get("features", []), start=1):
+            if not isinstance(feature, dict):
+                continue
+            _append_feature(
+                feature.get("geometry"),
+                feature.get("properties"),
+                f"Feature_{idx}",
+            )
+        return features
+
+    if isinstance(data, dict) and data.get("type") == "Feature":
+        _append_feature(data.get("geometry"), data.get("properties"), "Feature_1")
+        return features
+
+    if isinstance(data, dict) and isinstance(data.get("type"), str):
+        _append_feature(data, {}, "Geometry_1")
+        return features
+
+    raise RuntimeError("Unsupported GeoJSON structure.")
+
+
+def _create_boundary_wire_object_from_lines(
     collection,
     obj_name,
-    geometry,
+    line_coords,
     globe_radius,
     kind,
     geo_name,
     continent_name,
     iso2,
     iso3,
+    max_segment_deg=0.0,
+    spherical_tolerance_deg=0.0,
 ):
     vertices = []
     edges = []
     offset = 0
 
-    for coords in _iter_line_coords(geometry):
-        if len(coords) < 2:
+    for coords in line_coords:
+        local_points = _line_coords_to_simplified_xyz(
+            coords,
+            globe_radius,
+            max_segment_deg=max_segment_deg,
+            spherical_tolerance_deg=spherical_tolerance_deg,
+        )
+        if len(local_points) < 2:
             continue
-
-        local_points = []
-        for lon, lat, *_rest in coords:
-            local_points.append(_latlon_to_xyz(lat, lon, globe_radius))
 
         vertices.extend(local_points)
         for i in range(len(local_points) - 1):
@@ -301,6 +784,100 @@ def _create_boundary_wire_object(
     obj["geo_iso3"] = iso3
     collection.objects.link(obj)
     return obj
+
+
+def _create_curve_outline_object_from_lines(
+    collection,
+    obj_name,
+    line_coords,
+    globe_radius,
+    kind,
+    geo_name,
+    continent_name,
+    iso2,
+    iso3,
+    max_segment_deg=0.0,
+    spherical_tolerance_deg=0.0,
+    spline_type="NURBS",
+):
+    curve_data = bpy.data.curves.new(f"{obj_name}_Curve", type="CURVE")
+    curve_data.dimensions = "3D"
+    curve_data.fill_mode = "NONE"
+    curve_data.resolution_u = 2
+
+    created_any = False
+
+    for coords in line_coords:
+        points = _line_coords_to_simplified_xyz(
+            coords,
+            globe_radius,
+            max_segment_deg=max_segment_deg,
+            spherical_tolerance_deg=spherical_tolerance_deg,
+        )
+        if len(points) < 2:
+            continue
+
+        created_any = True
+        if spline_type == "BEZIER":
+            spline = curve_data.splines.new("BEZIER")
+            spline.bezier_points.add(len(points) - 1)
+            for idx, point in enumerate(points):
+                bp = spline.bezier_points[idx]
+                bp.co = point
+                bp.handle_left_type = "AUTO"
+                bp.handle_right_type = "AUTO"
+        else:
+            subtype = "POLY" if spline_type == "POLY" else "NURBS"
+            spline = curve_data.splines.new(subtype)
+            spline.points.add(len(points) - 1)
+            for idx, point in enumerate(points):
+                spline.points[idx].co = (point[0], point[1], point[2], 1.0)
+
+            if subtype == "NURBS":
+                spline.use_endpoint_u = True
+                if len(points) >= 4:
+                    spline.order_u = min(4, len(points))
+
+    if not created_any:
+        bpy.data.curves.remove(curve_data, do_unlink=True)
+        return None
+
+    obj = bpy.data.objects.new(obj_name, curve_data)
+    obj["geo_kind"] = kind
+    obj["geo_name"] = geo_name
+    obj["geo_continent"] = continent_name
+    obj["geo_iso2"] = iso2
+    obj["geo_iso3"] = iso3
+    collection.objects.link(obj)
+    return obj
+
+
+def _create_boundary_wire_object(
+    collection,
+    obj_name,
+    geometry,
+    globe_radius,
+    kind,
+    geo_name,
+    continent_name,
+    iso2,
+    iso3,
+    max_segment_deg=0.0,
+    spherical_tolerance_deg=0.0,
+):
+    return _create_boundary_wire_object_from_lines(
+        collection=collection,
+        obj_name=obj_name,
+        line_coords=_iter_line_coords(geometry),
+        globe_radius=globe_radius,
+        kind=kind,
+        geo_name=geo_name,
+        continent_name=continent_name,
+        iso2=iso2,
+        iso3=iso3,
+        max_segment_deg=max_segment_deg,
+        spherical_tolerance_deg=spherical_tolerance_deg,
+    )
 
 
 def _create_reference_globe(collection, radius, resolution):
@@ -782,8 +1359,196 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
         step=0.01,
         precision=4,
     )
+    geojson_curve_step_deg: bpy.props.FloatProperty(
+        name="Curve Step (deg)",
+        description=(
+            "Max spherical arc segment for imported GeoJSON lines. "
+            "Smaller values better preserve curvature on coarse datasets"
+        ),
+        default=2.0,
+        min=0.1,
+        max=30.0,
+        step=1,
+        precision=2,
+    )
+    geojson_simplify_tolerance_deg: bpy.props.FloatProperty(
+        name="Simplify Tol (deg)",
+        description=(
+            "Reduce dense GeoJSON vertices before projection. "
+            "Set 0 to disable simplification"
+        ),
+        default=0.0,
+        min=0.0,
+        max=5.0,
+        step=0.1,
+        precision=3,
+    )
+    geojson_output_mode: bpy.props.EnumProperty(
+        name="Import As",
+        description="Create imported outlines as mesh edges or curve objects",
+        items=(
+            ("MESH", "Mesh Wire", "Mesh edges suitable for conversion/editing"),
+            ("CURVE", "Curve Outline", "3D curve outlines on the sphere"),
+        ),
+        default="CURVE",
+    )
+    geojson_curve_spline_type: bpy.props.EnumProperty(
+        name="Curve Type",
+        description="Spline type for curve outline import",
+        items=(
+            ("NURBS", "NURBS", "Smooth parametric curves"),
+            ("BEZIER", "Bezier", "Bezier splines with auto handles"),
+            ("POLY", "Poly", "Polyline curve matching sampled points"),
+        ),
+        default="NURBS",
+    )
+    geojson_spherical_tolerance_deg: bpy.props.FloatProperty(
+        name="Sphere Tol (deg)",
+        description=(
+            "Post-projection simplification on the sphere using angular error. "
+            "Set 0 to disable"
+        ),
+        default=0.0,
+        min=0.0,
+        max=5.0,
+        step=0.1,
+        precision=3,
+    )
+    geojson_split_collections: bpy.props.BoolProperty(
+        name="Split By Feature",
+        description="Create one child collection per imported GeoJSON feature",
+        default=False,
+    )
+    geojson_existing_data_mode: bpy.props.EnumProperty(
+        name="When Clearing",
+        description="How to handle existing GeoJSON imports when Clear Existing is on",
+        items=(
+            ("ARCHIVE", "Archive", "Move current imports into GeoJSON Archive"),
+            (
+                "DELETE",
+                "Delete",
+                "Delete existing imports recursively",
+            ),
+        ),
+        default="ARCHIVE",
+    )
     country_items: bpy.props.CollectionProperty(type=GeoCountryListItem)
     country_index: bpy.props.IntProperty(default=0)
+
+
+class OBJECT_OT_import_geojson_wireframes(bpy.types.Operator, ImportHelper):
+    bl_idname = "object.import_geojson_wireframes"
+    bl_label = "Import GeoJSON Wireframes"
+    bl_description = "Import GeoJSON boundaries and project them onto the globe"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filename_ext = ".geojson"
+    filter_glob: bpy.props.StringProperty(
+        default="*.geojson;*.json",
+        options={"HIDDEN"},
+    )
+
+    def execute(self, context):
+        settings = context.scene.country_wireframe_settings
+
+        try:
+            features = _load_geojson_features(self.filepath)
+        except Exception as exc:
+            self.report({"ERROR"}, f"Could not read GeoJSON: {exc}")
+            return {"CANCELLED"}
+
+        if not features:
+            self.report({"ERROR"}, "No importable line or polygon features found.")
+            return {"CANCELLED"}
+
+        root = _get_or_create_collection(context.scene.collection, "Geo Wireframes")
+        imports_coll = _get_child_collection(root, "GeoJSON Imports")
+        if imports_coll is None:
+            imports_coll = _get_or_create_collection(root, "GeoJSON Imports")
+
+        if settings.clear_existing:
+            if settings.geojson_existing_data_mode == "DELETE":
+                _clear_collection_recursive(imports_coll)
+            else:
+                if imports_coll.objects or imports_coll.children:
+                    archived_name = _archive_geojson_imports(root, imports_coll)
+                    self.report(
+                        {"INFO"},
+                        f"Archived previous GeoJSON imports to '{archived_name}'.",
+                    )
+                imports_coll = _get_or_create_collection(root, "GeoJSON Imports")
+
+        overlay_radius = settings.globe_radius * (1.0 + settings.overlay_offset)
+        created = 0
+
+        for index, feature in enumerate(features, start=1):
+            feature_name = str(feature.get("name", f"Feature_{index}")).strip()
+            if not feature_name:
+                feature_name = f"Feature_{index}"
+            object_suffix = _safe_object_name(
+                feature_name,
+                fallback=f"Feature_{index}",
+            )
+
+            source_lines = feature["lines"]
+            if settings.geojson_simplify_tolerance_deg > 0.0:
+                source_lines = _simplify_lines(
+                    source_lines,
+                    settings.geojson_simplify_tolerance_deg,
+                )
+
+            feature_coll = imports_coll
+            if settings.geojson_split_collections:
+                feature_coll = _get_or_create_collection(
+                    imports_coll,
+                    f"Feature_{index:04d}_{object_suffix}",
+                )
+
+            if settings.geojson_output_mode == "CURVE":
+                obj = _create_curve_outline_object_from_lines(
+                    collection=feature_coll,
+                    obj_name=f"GeoJSON_{object_suffix}",
+                    line_coords=source_lines,
+                    globe_radius=overlay_radius,
+                    kind="geojson",
+                    geo_name=feature_name,
+                    continent_name="",
+                    iso2="",
+                    iso3="",
+                    max_segment_deg=settings.geojson_curve_step_deg,
+                    spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
+                    spline_type=settings.geojson_curve_spline_type,
+                )
+            else:
+                obj = _create_boundary_wire_object_from_lines(
+                    collection=feature_coll,
+                    obj_name=f"GeoJSON_{object_suffix}",
+                    line_coords=source_lines,
+                    globe_radius=overlay_radius,
+                    kind="geojson",
+                    geo_name=feature_name,
+                    continent_name="",
+                    iso2="",
+                    iso3="",
+                    max_segment_deg=settings.geojson_curve_step_deg,
+                    spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
+                )
+            if obj is None:
+                continue
+
+            obj["geo_source_file"] = self.filepath
+            obj["geo_feature_index"] = index
+            created += 1
+
+        if created == 0:
+            self.report({"ERROR"}, "No valid geometries were created from GeoJSON.")
+            return {"CANCELLED"}
+
+        self.report(
+            {"INFO"},
+            f"Imported {created} GeoJSON feature wireframe(s).",
+        )
+        return {"FINISHED"}
 
 
 class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
@@ -1125,6 +1890,21 @@ class VIEW3D_PT_country_wireframes(bpy.types.Panel):
         layout.prop(settings, "continent_scale")
         layout.prop(settings, "add_surface_mesh")
         layout.separator()
+        layout.label(text="GeoJSON Import")
+        layout.prop(settings, "geojson_output_mode")
+        if settings.geojson_output_mode == "CURVE":
+            layout.prop(settings, "geojson_curve_spline_type")
+        layout.prop(settings, "geojson_curve_step_deg")
+        layout.prop(settings, "geojson_simplify_tolerance_deg")
+        layout.prop(settings, "geojson_spherical_tolerance_deg")
+        layout.prop(settings, "geojson_split_collections")
+        if settings.clear_existing:
+            layout.prop(settings, "geojson_existing_data_mode")
+        layout.operator(
+            "object.import_geojson_wireframes",
+            icon="IMPORT",
+        )
+        layout.separator()
         layout.operator(
             "object.create_country_wireframes",
             icon="MESH_UVSPHERE",
@@ -1142,6 +1922,7 @@ CLASSES = (
     OBJECT_OT_select_all_geo_countries,
     OBJECT_OT_select_none_geo_countries,
     CountryWireframeSettings,
+    OBJECT_OT_import_geojson_wireframes,
     OBJECT_OT_create_country_wireframes,
     OBJECT_OT_build_geo_nodes_source,
     VIEW3D_PT_country_wireframes,
