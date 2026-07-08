@@ -1,6 +1,9 @@
 import math
 import json
 import datetime
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import bpy
 import bmesh
@@ -644,6 +647,28 @@ def _iter_geojson_line_coords(geometry):
             yield from _iter_geojson_line_coords(sub)
 
 
+def _iter_geojson_point_coords(geometry):
+    if not isinstance(geometry, dict):
+        return
+
+    gtype = str(geometry.get("type", ""))
+    coords = geometry.get("coordinates")
+
+    if gtype == "Point" and isinstance(coords, list) and len(coords) >= 2:
+        yield coords
+        return
+
+    if gtype == "MultiPoint" and isinstance(coords, list):
+        for point in coords:
+            if isinstance(point, list) and len(point) >= 2:
+                yield point
+        return
+
+    if gtype == "GeometryCollection":
+        for sub in geometry.get("geometries", []):
+            yield from _iter_geojson_point_coords(sub)
+
+
 def _feature_name_from_properties(properties, fallback):
     if not isinstance(properties, dict):
         return fallback
@@ -694,25 +719,68 @@ def _clear_collection_recursive(collection):
         bpy.data.objects.remove(obj, do_unlink=True)
 
 
-def _load_geojson_features(file_path):
-    with open(file_path, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
+def _geojson_structure_diagnostics(data):
+    if isinstance(data, dict):
+        top_type = data.get("type", "<missing>")
+        keys = sorted(str(key) for key in data.keys())
+        keys_preview = ", ".join(keys[:8])
+        if len(keys) > 8:
+            keys_preview += ", ..."
 
-    features = []
+        details = [f"top-level type={top_type!r}", f"keys=[{keys_preview}]"]
+
+        if top_type == "FeatureCollection":
+            features_value = data.get("features")
+            if isinstance(features_value, list):
+                details.append(f"feature_count={len(features_value)}")
+                if features_value and isinstance(features_value[0], dict):
+                    first_geom = features_value[0].get("geometry")
+                    if isinstance(first_geom, dict):
+                        details.append(
+                            "first_feature_geometry="
+                            f"{first_geom.get('type', '<missing>')!r}"
+                        )
+            else:
+                details.append(f"features_type={type(features_value).__name__}")
+        elif top_type == "Feature":
+            geom = data.get("geometry")
+            if isinstance(geom, dict):
+                details.append(f"feature_geometry={geom.get('type', '<missing>')!r}")
+            else:
+                details.append(f"geometry_type={type(geom).__name__}")
+        elif top_type == "Topology":
+            details.append(
+                "looks_like_topojson=True (convert TopoJSON to GeoJSON first)"
+            )
+
+        return "; ".join(details)
+
+    return f"top-level JSON value is {type(data).__name__}, expected object/dict"
+
+
+def _load_geojson_feature_payload_from_data(data):
+    payload = []
 
     def _append_feature(geometry, properties, fallback_name):
         if not isinstance(geometry, dict):
             return
+
         lines = [line for line in _iter_geojson_line_coords(geometry) if len(line) >= 2]
-        if not lines:
+        points = [point for point in _iter_geojson_point_coords(geometry)]
+
+        if not lines and not points:
             return
-        features.append(
+
+        payload.append(
             {
                 "name": _feature_name_from_properties(properties, fallback_name),
                 "properties": properties if isinstance(properties, dict) else {},
                 "lines": lines,
+                "points": points,
             }
         )
+
+    diagnostics = _geojson_structure_diagnostics(data)
 
     if isinstance(data, dict) and data.get("type") == "FeatureCollection":
         for idx, feature in enumerate(data.get("features", []), start=1):
@@ -723,17 +791,28 @@ def _load_geojson_features(file_path):
                 feature.get("properties"),
                 f"Feature_{idx}",
             )
-        return features
+        return payload
 
     if isinstance(data, dict) and data.get("type") == "Feature":
         _append_feature(data.get("geometry"), data.get("properties"), "Feature_1")
-        return features
+        return payload
 
     if isinstance(data, dict) and isinstance(data.get("type"), str):
         _append_feature(data, {}, "Geometry_1")
-        return features
+        return payload
 
-    raise RuntimeError("Unsupported GeoJSON structure.")
+    raise RuntimeError(
+        "Unsupported GeoJSON structure. "
+        f"{diagnostics}. Accepted top-level types: FeatureCollection, "
+        "Feature, or a geometry object (Point/MultiPoint/LineString/"
+        "MultiLineString/Polygon/MultiPolygon/GeometryCollection)."
+    )
+
+
+def _load_geojson_features(file_path):
+    with open(file_path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    return _load_geojson_feature_payload_from_data(data)
 
 
 def _create_boundary_wire_object_from_lines(
@@ -802,7 +881,15 @@ def _create_curve_outline_object_from_lines(
 ):
     curve_data = bpy.data.curves.new(f"{obj_name}_Curve", type="CURVE")
     curve_data.dimensions = "3D"
-    curve_data.fill_mode = "NONE"
+    # Blender versions differ on valid fill_mode enum values.
+    try:
+        fill_enum = curve_data.bl_rna.properties["fill_mode"].enum_items.keys()
+        if "NONE" in fill_enum:
+            curve_data.fill_mode = "NONE"
+        elif "FULL" in fill_enum:
+            curve_data.fill_mode = "FULL"
+    except Exception:
+        pass
     curve_data.resolution_u = 2
 
     created_any = False
@@ -850,6 +937,261 @@ def _create_curve_outline_object_from_lines(
     obj["geo_iso3"] = iso3
     collection.objects.link(obj)
     return obj
+
+
+def _coord_to_lonlat(coord):
+    try:
+        lon, lat, *_ = coord
+        return (float(lon), float(lat))
+    except Exception:
+        return None
+
+
+def _create_geojson_point_object(
+    collection,
+    obj_name,
+    location,
+    mode,
+    sphere_mesh,
+    geo_name,
+):
+    if mode == "EMPTY":
+        obj = bpy.data.objects.new(obj_name, None)
+        obj.empty_display_type = "SPHERE"
+        obj.empty_display_size = 0.2
+    else:
+        obj = bpy.data.objects.new(obj_name, sphere_mesh)
+        obj.display_type = "SOLID"
+
+    obj.location = location
+    obj["geo_kind"] = "geojson_point"
+    obj["geo_name"] = geo_name
+    obj["geo_continent"] = ""
+    obj["geo_iso2"] = ""
+    obj["geo_iso3"] = ""
+    collection.objects.link(obj)
+    return obj
+
+
+def _import_geojson_feature_payload(context, settings, payload, source_label):
+    root = _get_or_create_collection(context.scene.collection, "Geo Wireframes")
+    imports_coll = _get_child_collection(root, "GeoJSON Imports")
+    if imports_coll is None:
+        imports_coll = _get_or_create_collection(root, "GeoJSON Imports")
+
+    if settings.clear_existing:
+        if settings.geojson_existing_data_mode == "DELETE":
+            _clear_collection_recursive(imports_coll)
+        else:
+            if imports_coll.objects or imports_coll.children:
+                _archive_geojson_imports(root, imports_coll)
+            imports_coll = _get_or_create_collection(root, "GeoJSON Imports")
+
+    overlay_radius = settings.globe_radius * (1.0 + settings.overlay_offset)
+    line_created = 0
+    point_created = 0
+
+    sphere_mesh = None
+    if settings.geojson_point_mode == "SPHERE":
+        point_radius = max(
+            settings.globe_radius * settings.geojson_point_scale,
+            0.00005,
+        )
+        sphere_mesh = _build_sphere_mesh(
+            "GeoJSONPointPrototypeMesh",
+            point_radius,
+            max(6, settings.geojson_point_resolution),
+            add_surface=True,
+        )
+        proto_obj = bpy.data.objects.new("GeoJSONPointPrototype", sphere_mesh)
+        proto_obj.hide_viewport = True
+        proto_obj.hide_render = True
+        imports_coll.objects.link(proto_obj)
+
+    for index, feature in enumerate(payload, start=1):
+        feature_name = str(feature.get("name", f"Feature_{index}")).strip()
+        if not feature_name:
+            feature_name = f"Feature_{index}"
+        object_suffix = _safe_object_name(
+            feature_name,
+            fallback=f"Feature_{index}",
+        )
+
+        feature_coll = imports_coll
+        if settings.geojson_split_collections:
+            feature_coll = _get_or_create_collection(
+                imports_coll,
+                f"Feature_{index:04d}_{object_suffix}",
+            )
+
+        source_lines = feature.get("lines", [])
+        if settings.geojson_simplify_tolerance_deg > 0.0 and source_lines:
+            source_lines = _simplify_lines(
+                source_lines,
+                settings.geojson_simplify_tolerance_deg,
+            )
+
+        if source_lines:
+            if settings.geojson_output_mode == "CURVE":
+                line_obj = _create_curve_outline_object_from_lines(
+                    collection=feature_coll,
+                    obj_name=f"GeoJSON_{object_suffix}",
+                    line_coords=source_lines,
+                    globe_radius=overlay_radius,
+                    kind="geojson",
+                    geo_name=feature_name,
+                    continent_name="",
+                    iso2="",
+                    iso3="",
+                    max_segment_deg=settings.geojson_curve_step_deg,
+                    spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
+                    spline_type=settings.geojson_curve_spline_type,
+                )
+            else:
+                line_obj = _create_boundary_wire_object_from_lines(
+                    collection=feature_coll,
+                    obj_name=f"GeoJSON_{object_suffix}",
+                    line_coords=source_lines,
+                    globe_radius=overlay_radius,
+                    kind="geojson",
+                    geo_name=feature_name,
+                    continent_name="",
+                    iso2="",
+                    iso3="",
+                    max_segment_deg=settings.geojson_curve_step_deg,
+                    spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
+                )
+
+            if line_obj is not None:
+                line_obj["geo_source_file"] = source_label
+                line_obj["geo_feature_index"] = index
+                line_created += 1
+
+        if settings.geojson_point_mode == "IGNORE":
+            continue
+
+        point_coords = feature.get("points", [])
+        for point_index, coord in enumerate(point_coords, start=1):
+            lonlat = _coord_to_lonlat(coord)
+            if lonlat is None:
+                continue
+
+            lon, lat = lonlat
+            location = _latlon_to_xyz(lat, lon, overlay_radius)
+            point_name = f"GeoJSONPoint_{object_suffix}_{point_index:04d}"
+            point_obj = _create_geojson_point_object(
+                collection=feature_coll,
+                obj_name=point_name,
+                location=location,
+                mode=settings.geojson_point_mode,
+                sphere_mesh=sphere_mesh,
+                geo_name=feature_name,
+            )
+            point_obj["geo_source_file"] = source_label
+            point_obj["geo_feature_index"] = index
+            point_obj["geo_point_index"] = point_index
+            point_obj["geo_lon"] = lon
+            point_obj["geo_lat"] = lat
+            point_created += 1
+
+    return line_created, point_created
+
+
+def _parse_osm_bbox(raw_text):
+    tokens = [token.strip() for token in str(raw_text).split(",") if token.strip()]
+    if len(tokens) != 4:
+        raise RuntimeError("OSM bbox must have 4 comma-separated numbers.")
+
+    south, west, north, east = [float(token) for token in tokens]
+    if south >= north:
+        raise RuntimeError("OSM bbox south must be < north.")
+    if west >= east:
+        raise RuntimeError("OSM bbox west must be < east.")
+    return (south, west, north, east)
+
+
+def _parse_osm_tag_filters(raw_text):
+    tokens = _tokenize_values(raw_text)
+    parsed = []
+    for token in tokens:
+        if "=" not in token:
+            parsed.append((token.strip(), None))
+            continue
+        key, value = token.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        parsed.append((key, value if value else None))
+    return parsed
+
+
+def _build_overpass_query_from_settings(settings):
+    if settings.osm_query_mode == "CUSTOM":
+        custom = str(settings.osm_custom_query).strip()
+        if not custom:
+            raise RuntimeError("OSM custom query is empty.")
+        return custom
+
+    south, west, north, east = _parse_osm_bbox(settings.osm_bbox)
+    bbox = f"({south},{west},{north},{east})"
+    filters = _parse_osm_tag_filters(settings.osm_tag_filters)
+
+    selector_lines = []
+    if not filters:
+        selector_lines.append(f"  nwr{bbox};")
+    else:
+        for key, value in filters:
+            if value is None:
+                selector_lines.append(f"  nwr[\"{key}\"]{bbox};")
+            else:
+                selector_lines.append(f"  nwr[\"{key}\"=\"{value}\"]{bbox};")
+
+    timeout_s = max(5, int(settings.osm_timeout_seconds))
+    query = [f"[out:json][timeout:{timeout_s}];", "("]
+    query.extend(selector_lines)
+    query.extend([")", "out body geom;"])
+    return "\n".join(query)
+
+
+def _fetch_overpass_json(endpoint, query, timeout_seconds):
+    encoded = urllib.parse.urlencode({"data": query}).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=encoded,
+        headers={"User-Agent": "BlenderGeoWireframes/1.0"},
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            content = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+        raise RuntimeError(
+            f"Overpass request failed with HTTP {exc.code}. {detail}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Overpass request failed: {exc}") from exc
+
+    try:
+        return json.loads(content)
+    except Exception as exc:
+        raise RuntimeError(f"Overpass returned invalid JSON: {exc}") from exc
+
+
+def _convert_overpass_to_geojson(overpass_json):
+    try:
+        import osm2geojson
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not import osm2geojson. Install it in the Blender uv "
+            "environment to enable OSM conversion."
+        ) from exc
+
+    try:
+        return osm2geojson.json2geojson(overpass_json)
+    except Exception as exc:
+        raise RuntimeError(f"Failed converting OSM JSON to GeoJSON: {exc}") from exc
 
 
 def _create_boundary_wire_object(
@@ -1392,6 +1734,31 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
         ),
         default="CURVE",
     )
+    geojson_point_mode: bpy.props.EnumProperty(
+        name="Point Layers",
+        description="How to import GeoJSON Point and MultiPoint geometries",
+        items=(
+            ("IGNORE", "Ignore", "Skip point and multipoint geometries"),
+            ("EMPTY", "Empties", "Create empty marker objects for points"),
+            ("SPHERE", "Spheres", "Create small sphere markers for points"),
+        ),
+        default="SPHERE",
+    )
+    geojson_point_scale: bpy.props.FloatProperty(
+        name="Point Scale",
+        description="Point sphere size relative to globe radius",
+        default=0.004,
+        min=0.00001,
+        max=0.25,
+        subtype="FACTOR",
+    )
+    geojson_point_resolution: bpy.props.IntProperty(
+        name="Point Resolution",
+        description="Segments for point sphere markers",
+        default=10,
+        min=4,
+        max=128,
+    )
     geojson_curve_spline_type: bpy.props.EnumProperty(
         name="Curve Type",
         description="Spline type for curve outline import",
@@ -1432,6 +1799,52 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
         ),
         default="ARCHIVE",
     )
+    osm_query_mode: bpy.props.EnumProperty(
+        name="OSM Query",
+        description="Use generated bbox/tag query or paste a custom Overpass query",
+        items=(
+            (
+                "BBOX_TAGS",
+                "BBox + Tags",
+                "Build a query from bbox and tag filters",
+            ),
+            ("CUSTOM", "Custom", "Use raw Overpass QL"),
+        ),
+        default="BBOX_TAGS",
+    )
+    osm_endpoint: bpy.props.StringProperty(
+        name="Overpass Endpoint",
+        description="Overpass API interpreter endpoint",
+        default="https://overpass-api.de/api/interpreter",
+    )
+    osm_timeout_seconds: bpy.props.IntProperty(
+        name="Timeout (s)",
+        description="Network timeout for Overpass request",
+        default=45,
+        min=5,
+        max=600,
+    )
+    osm_bbox: bpy.props.StringProperty(
+        name="BBox",
+        description="south,west,north,east in WGS84 degrees",
+        default="40.70,-74.03,40.75,-73.96",
+    )
+    osm_tag_filters: bpy.props.StringProperty(
+        name="Tag Filters",
+        description="Comma-separated tags, e.g. building, highway=primary",
+        default="building",
+    )
+    osm_custom_query: bpy.props.StringProperty(
+        name="Overpass QL",
+        description="Custom Overpass query (must include out clause)",
+        default=(
+            "[out:json][timeout:45];\n"
+            "(\n"
+            "  nwr[\"building\"](40.70,-74.03,40.75,-73.96);\n"
+            ");\n"
+            "out body geom;"
+        ),
+    )
     country_items: bpy.props.CollectionProperty(type=GeoCountryListItem)
     country_index: bpy.props.IntProperty(default=0)
 
@@ -1452,101 +1865,88 @@ class OBJECT_OT_import_geojson_wireframes(bpy.types.Operator, ImportHelper):
         settings = context.scene.country_wireframe_settings
 
         try:
-            features = _load_geojson_features(self.filepath)
+            payload = _load_geojson_features(self.filepath)
         except Exception as exc:
+            print(f"[Geo Wireframes][GeoJSON Diagnostic] {exc}")
             self.report({"ERROR"}, f"Could not read GeoJSON: {exc}")
             return {"CANCELLED"}
 
-        if not features:
-            self.report({"ERROR"}, "No importable line or polygon features found.")
+        if not payload:
+            self.report(
+                {"ERROR"},
+                "No importable GeoJSON features found (lines, polygons, or points).",
+            )
             return {"CANCELLED"}
 
-        root = _get_or_create_collection(context.scene.collection, "Geo Wireframes")
-        imports_coll = _get_child_collection(root, "GeoJSON Imports")
-        if imports_coll is None:
-            imports_coll = _get_or_create_collection(root, "GeoJSON Imports")
+        lines_created, points_created = _import_geojson_feature_payload(
+            context,
+            settings,
+            payload,
+            self.filepath,
+        )
 
-        if settings.clear_existing:
-            if settings.geojson_existing_data_mode == "DELETE":
-                _clear_collection_recursive(imports_coll)
-            else:
-                if imports_coll.objects or imports_coll.children:
-                    archived_name = _archive_geojson_imports(root, imports_coll)
-                    self.report(
-                        {"INFO"},
-                        f"Archived previous GeoJSON imports to '{archived_name}'.",
-                    )
-                imports_coll = _get_or_create_collection(root, "GeoJSON Imports")
-
-        overlay_radius = settings.globe_radius * (1.0 + settings.overlay_offset)
-        created = 0
-
-        for index, feature in enumerate(features, start=1):
-            feature_name = str(feature.get("name", f"Feature_{index}")).strip()
-            if not feature_name:
-                feature_name = f"Feature_{index}"
-            object_suffix = _safe_object_name(
-                feature_name,
-                fallback=f"Feature_{index}",
+        if lines_created == 0 and points_created == 0:
+            self.report(
+                {"ERROR"},
+                "No valid geometries were created from GeoJSON.",
             )
-
-            source_lines = feature["lines"]
-            if settings.geojson_simplify_tolerance_deg > 0.0:
-                source_lines = _simplify_lines(
-                    source_lines,
-                    settings.geojson_simplify_tolerance_deg,
-                )
-
-            feature_coll = imports_coll
-            if settings.geojson_split_collections:
-                feature_coll = _get_or_create_collection(
-                    imports_coll,
-                    f"Feature_{index:04d}_{object_suffix}",
-                )
-
-            if settings.geojson_output_mode == "CURVE":
-                obj = _create_curve_outline_object_from_lines(
-                    collection=feature_coll,
-                    obj_name=f"GeoJSON_{object_suffix}",
-                    line_coords=source_lines,
-                    globe_radius=overlay_radius,
-                    kind="geojson",
-                    geo_name=feature_name,
-                    continent_name="",
-                    iso2="",
-                    iso3="",
-                    max_segment_deg=settings.geojson_curve_step_deg,
-                    spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
-                    spline_type=settings.geojson_curve_spline_type,
-                )
-            else:
-                obj = _create_boundary_wire_object_from_lines(
-                    collection=feature_coll,
-                    obj_name=f"GeoJSON_{object_suffix}",
-                    line_coords=source_lines,
-                    globe_radius=overlay_radius,
-                    kind="geojson",
-                    geo_name=feature_name,
-                    continent_name="",
-                    iso2="",
-                    iso3="",
-                    max_segment_deg=settings.geojson_curve_step_deg,
-                    spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
-                )
-            if obj is None:
-                continue
-
-            obj["geo_source_file"] = self.filepath
-            obj["geo_feature_index"] = index
-            created += 1
-
-        if created == 0:
-            self.report({"ERROR"}, "No valid geometries were created from GeoJSON.")
             return {"CANCELLED"}
 
         self.report(
             {"INFO"},
-            f"Imported {created} GeoJSON feature wireframe(s).",
+            (
+                f"Imported {lines_created} line feature(s) and "
+                f"{points_created} point marker(s)."
+            ),
+        )
+        return {"FINISHED"}
+
+
+class OBJECT_OT_import_osm_overpass(bpy.types.Operator):
+    bl_idname = "object.import_osm_overpass"
+    bl_label = "Import OSM (Overpass)"
+    bl_description = "Fetch OSM data through Overpass, convert to GeoJSON, and import"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        settings = context.scene.country_wireframe_settings
+
+        endpoint = str(settings.osm_endpoint).strip()
+        if not endpoint:
+            self.report({"ERROR"}, "OSM endpoint is empty.")
+            return {"CANCELLED"}
+
+        try:
+            query = _build_overpass_query_from_settings(settings)
+            overpass_json = _fetch_overpass_json(
+                endpoint,
+                query,
+                max(5, int(settings.osm_timeout_seconds)),
+            )
+            geojson = _convert_overpass_to_geojson(overpass_json)
+            payload = _load_geojson_feature_payload_from_data(geojson)
+        except Exception as exc:
+            print(f"[Geo Wireframes][OSM Diagnostic] {exc}")
+            self.report({"ERROR"}, f"OSM import failed: {exc}")
+            return {"CANCELLED"}
+
+        if not payload:
+            self.report({"WARNING"}, "OSM query returned no importable geometry.")
+            return {"CANCELLED"}
+
+        lines_created, points_created = _import_geojson_feature_payload(
+            context,
+            settings,
+            payload,
+            f"overpass:{endpoint}",
+        )
+
+        self.report(
+            {"INFO"},
+            (
+                f"OSM import complete: {lines_created} line feature(s), "
+                f"{points_created} point marker(s)."
+            ),
         )
         return {"FINISHED"}
 
@@ -1853,15 +2253,15 @@ class VIEW3D_PT_country_wireframes(bpy.types.Panel):
         layout = self.layout
         settings = context.scene.country_wireframe_settings
 
-        layout.label(text="Build Sets")
-        row = layout.row(align=True)
+        build_box = layout.box()
+        build_box.label(text="Build Sets")
+        row = build_box.row(align=True)
         row.prop(settings, "countries_enabled", toggle=True)
         row.prop(settings, "continents_enabled", toggle=True)
 
-        layout.separator()
-        layout.prop(settings, "generation_mode")
+        build_box.prop(settings, "generation_mode")
 
-        row = layout.row()
+        row = build_box.row()
         row.template_list(
             "VIEW3D_UL_geo_country_list",
             "",
@@ -1880,36 +2280,58 @@ class VIEW3D_PT_country_wireframes(bpy.types.Panel):
             icon="CHECKBOX_DEHLT",
         )
 
-        layout.prop(settings, "continents")
-        layout.prop(settings, "clear_existing")
-        layout.prop(settings, "globe_radius")
-        layout.prop(settings, "create_reference_globe")
-        layout.prop(settings, "overlay_offset")
-        layout.prop(settings, "resolution")
-        layout.prop(settings, "marker_scale")
-        layout.prop(settings, "continent_scale")
-        layout.prop(settings, "add_surface_mesh")
-        layout.separator()
-        layout.label(text="GeoJSON Import")
-        layout.prop(settings, "geojson_output_mode")
-        if settings.geojson_output_mode == "CURVE":
-            layout.prop(settings, "geojson_curve_spline_type")
-        layout.prop(settings, "geojson_curve_step_deg")
-        layout.prop(settings, "geojson_simplify_tolerance_deg")
-        layout.prop(settings, "geojson_spherical_tolerance_deg")
-        layout.prop(settings, "geojson_split_collections")
-        if settings.clear_existing:
-            layout.prop(settings, "geojson_existing_data_mode")
-        layout.operator(
-            "object.import_geojson_wireframes",
-            icon="IMPORT",
-        )
-        layout.separator()
-        layout.operator(
+        build_box.prop(settings, "continents")
+        build_box.prop(settings, "clear_existing")
+        build_box.prop(settings, "globe_radius")
+        build_box.prop(settings, "create_reference_globe")
+        build_box.prop(settings, "overlay_offset")
+        build_box.prop(settings, "resolution")
+        build_box.prop(settings, "marker_scale")
+        build_box.prop(settings, "continent_scale")
+        build_box.prop(settings, "add_surface_mesh")
+        build_box.operator(
             "object.create_country_wireframes",
             icon="MESH_UVSPHERE",
         )
-        layout.operator(
+
+        geojson_box = layout.box()
+        geojson_box.label(text="GeoJSON Import")
+        geojson_box.prop(settings, "geojson_output_mode")
+        if settings.geojson_output_mode == "CURVE":
+            geojson_box.prop(settings, "geojson_curve_spline_type")
+        geojson_box.prop(settings, "geojson_point_mode")
+        if settings.geojson_point_mode == "SPHERE":
+            geojson_box.prop(settings, "geojson_point_scale")
+            geojson_box.prop(settings, "geojson_point_resolution")
+        geojson_box.prop(settings, "geojson_curve_step_deg")
+        geojson_box.prop(settings, "geojson_simplify_tolerance_deg")
+        geojson_box.prop(settings, "geojson_spherical_tolerance_deg")
+        geojson_box.prop(settings, "geojson_split_collections")
+        if settings.clear_existing:
+            geojson_box.prop(settings, "geojson_existing_data_mode")
+        geojson_box.operator(
+            "object.import_geojson_wireframes",
+            icon="IMPORT",
+        )
+
+        osm_box = layout.box()
+        osm_box.label(text="OSM Import")
+        osm_box.prop(settings, "osm_query_mode")
+        osm_box.prop(settings, "osm_endpoint")
+        osm_box.prop(settings, "osm_timeout_seconds")
+        if settings.osm_query_mode == "CUSTOM":
+            osm_box.prop(settings, "osm_custom_query")
+        else:
+            osm_box.prop(settings, "osm_bbox")
+            osm_box.prop(settings, "osm_tag_filters")
+        osm_box.operator(
+            "object.import_osm_overpass",
+            icon="URL",
+        )
+
+        utility_box = layout.box()
+        utility_box.label(text="Utilities")
+        utility_box.operator(
             "object.build_geo_nodes_source",
             icon="NODETREE",
         )
@@ -1923,6 +2345,7 @@ CLASSES = (
     OBJECT_OT_select_none_geo_countries,
     CountryWireframeSettings,
     OBJECT_OT_import_geojson_wireframes,
+    OBJECT_OT_import_osm_overpass,
     OBJECT_OT_create_country_wireframes,
     OBJECT_OT_build_geo_nodes_source,
     VIEW3D_PT_country_wireframes,
