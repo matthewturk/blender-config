@@ -1,6 +1,7 @@
 from . import chezmoi_sync
 from . import country_wireframes
 from . import get_extension_keys
+from . import flat_gis_importer
 
 # Define the Blender addon/script metadata block
 bl_info = {
@@ -21,6 +22,7 @@ def register():
     chezmoi_sync.register()
     country_wireframes.register()
     get_extension_keys.register()
+    flat_gis_importer.register()
 
 
 def unregister():
@@ -28,6 +30,7 @@ def unregister():
     chezmoi_sync.unregister()
     country_wireframes.unregister()
     get_extension_keys.unregister()
+    flat_gis_importer.unregister()
 
 
 if __name__ == "__main__":
