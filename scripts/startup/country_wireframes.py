@@ -1001,7 +1001,7 @@ def _feature_name_from_properties(properties, fallback):
     return fallback
 
 def _safe_object_name(text, fallback="Feature"):
-    value = str(text).strip()
+    value = str(text).strip().replace(": ", "_")
     if not value:
         value = fallback
 
@@ -1017,6 +1017,27 @@ def _safe_object_name(text, fallback="Feature"):
         name = fallback
     return name[:63]
 
+import bpy
+
+def get_or_create_sub_collection(parent_collection, name):
+    """
+    Finds a sub-collection by name under a parent collection. 
+    Creates and links it if it doesn't exist.
+    """
+    # Standardize the collection name (e.g., capitalize it)
+    coll_name = str(name).strip().capitalize()
+    
+    # Check if it already exists under the parent
+    if coll_name in parent_collection.children:
+        return parent_collection.children[coll_name]
+        
+    # If not, create a brand new collection data block
+    new_coll = bpy.data.collections.new(coll_name)
+    
+    # Link it underneath the parent collection to maintain hierarchy
+    parent_collection.children.link(new_coll)
+    
+    return new_coll
 
 def _clear_collection_recursive(collection):
     for child in list(collection.children):
@@ -1346,6 +1367,26 @@ def _import_geojson_feature_payload(context, settings, payload, source_label):
 
     for index, feature in enumerate(payload, start=1):
         feature_name = str(feature.get("name", f"Feature_{index}")).strip()
+        properties = {key: value for key, value in (feature.get("properties", {}) or {}).items() if value is not None}
+
+        if "building" in properties:
+            type_label = "Buildings"
+        elif "highway" in properties or "way" in properties:
+            type_label = "Ways"
+        elif properties.get("amenity") == "tree" or "natural" in properties:
+            type_label = "Vegetation"
+        elif "landuse" in properties:
+            type_label = "Landuse"
+        elif "amenity" in properties:
+            type_label = "Amenities"
+        elif "tourism" in properties:
+            type_label = "Tourism"
+        elif "type" in properties:
+            type_label = properties["type"]  # Fallback to a custom feature 'type' if defined
+        else:
+            type_label = "GeoJSON_unknown"  # Ultimate fallback to geometry style (e.g., 'Points', 'Polygons')
+            print(properties)
+
         if not feature_name:
             feature_name = f"Feature_{index}"
         object_suffix = _safe_object_name(
@@ -1353,12 +1394,11 @@ def _import_geojson_feature_payload(context, settings, payload, source_label):
             fallback=f"Feature_{index}",
         )
 
-        feature_coll = imports_coll
         if settings.geojson_split_collections:
-            feature_coll = _get_or_create_collection(
-                imports_coll,
-                f"Feature_{index:04d}_{object_suffix}",
-            )
+            feature_coll = get_or_create_sub_collection(imports_coll,
+                                                        type_label)
+        else:
+            feature_coll = imports_coll
 
         source_lines = feature.get("lines", [])
         if settings.geojson_simplify_tolerance_deg > 0.0 and source_lines:
@@ -1408,6 +1448,9 @@ def _import_geojson_feature_payload(context, settings, payload, source_label):
                 line_obj["geo_source_file"] = source_label
                 line_obj["geo_feature_index"] = index
                 line_created += 1
+                for key, value in sorted(properties.items()):
+                    if value is not None:
+                        line_obj[f"osm:{key}"] = value
 
         if settings.geojson_point_mode == "IGNORE":
             continue
@@ -1440,6 +1483,9 @@ def _import_geojson_feature_payload(context, settings, payload, source_label):
             point_obj["geo_point_index"] = point_index
             point_obj["geo_lon"] = lon
             point_obj["geo_lat"] = lat
+            for key, value in properties.items():
+                if value is not None:
+                    point_obj[f"osm:{key}"] = value
             point_created += 1
 
     return line_created, point_created
@@ -2533,7 +2579,7 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
     geojson_split_collections: bpy.props.BoolProperty(
         name="Split By Feature",
         description="Create one child collection per imported GeoJSON feature",
-        default=False,
+        default=True,
     )
     geojson_existing_data_mode: bpy.props.EnumProperty(
         name="When Clearing",
@@ -2583,7 +2629,7 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
             ),
             ("ALL", "All", "All other presets"),
         ),
-        default="BUILDINGS",
+        default="ALL",
     )
     osm_endpoint: bpy.props.StringProperty(
         name="Overpass Endpoint",
