@@ -53,12 +53,28 @@ def has_pillow():
 # --- Help Functions for Coordinate Projection ---
 
 def get_projection_factors(ref_lat):
+    """
+    Computes precise WGS84 meters-per-degree factors for local flat projection.
+    Ensures an exact 1:1 metric scale between Latitude and Longitude to prevent geometric squishing.
+    """
     lat_rad = math.radians(ref_lat)
-    # WGS84 ellipsoid length of a degree of latitude and longitude in meters
-    lat_to_meters = 111132.95 - 559.82 * math.cos(2 * lat_rad) + 1.175 * math.cos(4 * lat_rad)
-    lon_to_meters = 111132.95 * math.cos(lat_rad)
+    
+    # Precise WGS84 Ellipsoid Constants
+    a = 6378137.0           # Semi-major axis (meters)
+    e_sq = 0.00669437999014 # Eccentricity squared
+    
+    # Curvature radius in the prime vertical (East-West)
+    sin_lat = math.sin(lat_rad)
+    n = a / math.sqrt(1.0 - e_sq * sin_lat * sin_lat)
+    
+    # Curvature radius in the meridian (North-South)
+    m = a * (1.0 - e_sq) / math.pow(1.0 - e_sq * sin_lat * sin_lat, 1.5)
+    
+    # Scaling factors (converting radians of curvature to meters per degree)
+    lat_to_meters = math.radians(m)
+    lon_to_meters = math.radians(n) * math.cos(lat_rad)
+    
     return lat_to_meters, lon_to_meters
-
 
 # --- Satellite Imagery Utilities ---
 
@@ -196,16 +212,71 @@ def get_socket_identifier(tree, name, in_out='INPUT'):
 def set_geonode_modifier_input(mod, tree, socket_name, value):
     identifier = get_socket_identifier(tree, socket_name, 'INPUT')
     if identifier:
-        print(mod, type(mod), identifier, type(identifier), socket_name)
         mod[identifier] = value
 
 
 # --- Geometry Nodes Trees Creation ---
 
-def create_building_geonodes_tree():
+def add_bounding_box_cropping_nodes(tree, nodes, links, entry_geometry_output, x_min, x_max, y_min, y_max):
+    """
+    Appends a non-destructive mathematical bounding-box mask inside Geometry Nodes.
+    Separates geometry cleanly by filtering components lying outside the imported meter bounds.
+    """
+    pos_node = nodes.new('GeometryNodeInputPosition')
+    separate_xyz = nodes.new('ShaderNodeSeparateXYZ')
+    links.new(pos_node.outputs['Position'], separate_xyz.inputs['Vector'])
+    
+    # Check X bounds
+    cmp_x_min = nodes.new('ShaderNodeMath')
+    cmp_x_min.operation = 'GREATER_THAN'
+    cmp_x_min.inputs[1].default_value = x_min
+    links.new(separate_xyz.outputs['X'], cmp_x_min.inputs[0])
+    
+    cmp_x_max = nodes.new('ShaderNodeMath')
+    cmp_x_max.operation = 'LESS_THAN'
+    cmp_x_max.inputs[1].default_value = x_max
+    links.new(separate_xyz.outputs['X'], cmp_x_max.inputs[0])
+    
+    and_x = nodes.new('ShaderNodeMath')
+    and_x.operation = 'MULTIPLY'
+    links.new(cmp_x_min.outputs['Value'], and_x.inputs[0])
+    links.new(cmp_x_max.outputs['Value'], and_x.inputs[1])
+    
+    # Check Y bounds
+    cmp_y_min = nodes.new('ShaderNodeMath')
+    cmp_y_min.operation = 'GREATER_THAN'
+    cmp_y_min.inputs[1].default_value = y_min
+    links.new(separate_xyz.outputs['Y'], cmp_y_min.inputs[0])
+    
+    cmp_y_max = nodes.new('ShaderNodeMath')
+    cmp_y_max.operation = 'LESS_THAN'
+    cmp_y_max.inputs[1].default_value = y_max
+    links.new(separate_xyz.outputs['Y'], cmp_y_max.inputs[0])
+    
+    and_y = nodes.new('ShaderNodeMath')
+    and_y.operation = 'MULTIPLY'
+    links.new(cmp_y_min.outputs['Value'], and_y.inputs[0])
+    links.new(cmp_y_max.outputs['Value'], and_y.inputs[1])
+    
+    # Final Mask
+    bbox_mask = nodes.new('ShaderNodeMath')
+    bbox_mask.operation = 'MULTIPLY'
+    links.new(and_x.outputs['Value'], bbox_mask.inputs[0])
+    links.new(and_y.outputs['Value'], bbox_mask.inputs[1])
+    
+    # Separate Geometry Node to cleanly filter
+    sep_geom = nodes.new('GeometryNodeSeparateGeometry')
+    sep_geom.domain = 'POINT'
+    links.new(entry_geometry_output, sep_geom.inputs['Geometry'])
+    links.new(bbox_mask.outputs['Value'], sep_geom.inputs['Selection'])
+    
+    return sep_geom.outputs['Selection']
+
+
+def create_building_geonodes_tree(x_min=None, x_max=None, y_min=None, y_max=None):
     group_name = "FlatGIS_Buildings"
     if group_name in bpy.data.node_groups:
-        return bpy.data.node_groups[group_name]
+        bpy.data.node_groups.remove(bpy.data.node_groups[group_name])
         
     tree = bpy.data.node_groups.new(group_name, 'GeometryNodeTree')
     
@@ -220,12 +291,20 @@ def create_building_geonodes_tree():
     input_node = nodes.new('NodeGroupInput')
     output_node = nodes.new('NodeGroupOutput')
     input_node.location = (-400, 0)
-    output_node.location = (600, 0)
+    output_node.location = (900, 0)
     
     obj_info = nodes.new('GeometryNodeObjectInfo')
     obj_info.location = (-200, 0)
     obj_info.transform_space = 'RELATIVE'
     links.new(input_node.outputs['Shadow Object'], obj_info.inputs['Object'])
+    
+    current_geometry_output = obj_info.outputs['Geometry']
+    
+    # Implement non-destructive bounding box clip if constraints are valid
+    if x_min is not None and x_max is not None and y_min is not None and y_max is not None:
+        current_geometry_output = add_bounding_box_cropping_nodes(
+            tree, nodes, links, current_geometry_output, x_min, x_max, y_min, y_max
+        )
     
     # Read Height Named Attribute
     attr_node = nodes.new('GeometryNodeInputNamedAttribute')
@@ -235,41 +314,36 @@ def create_building_geonodes_tree():
     
     # Extrude Mesh
     extrude = nodes.new('GeometryNodeExtrudeMesh')
-    extrude.location = (100, 0)
+    extrude.location = (200, 0)
     extrude.mode = 'FACES'
-    links.new(obj_info.outputs['Geometry'], extrude.inputs['Mesh'])
+    links.new(current_geometry_output, extrude.inputs['Mesh'])
     links.new(attr_node.outputs['Attribute'], extrude.inputs['Offset Scale'])
     
     # Flip bottom faces
     flip = nodes.new('GeometryNodeFlipFaces')
-    flip.location = (100, -200)
-    links.new(obj_info.outputs['Geometry'], flip.inputs['Mesh'])
+    flip.location = (200, -200)
+    links.new(current_geometry_output, flip.inputs['Mesh'])
     
     # Join bottom + sides/top
     join = nodes.new('GeometryNodeJoinGeometry')
-    join.location = (250, 0)
+    join.location = (450, 0)
     links.new(extrude.outputs['Mesh'], join.inputs['Geometry'])
     links.new(flip.outputs['Mesh'], join.inputs['Geometry'])
     
-    # Merge vertices
-    merge = nodes.new('GeometryNodeMergeByDistance')
-    merge.location = (380, 0)
-    links.new(join.outputs['Geometry'], merge.inputs['Geometry'])
-    
-    # Set Material
+    # Set Material (Removed destructive merge operators)
     set_mat = nodes.new('GeometryNodeSetMaterial')
-    set_mat.location = (480, 0)
-    links.new(merge.outputs['Geometry'], set_mat.inputs['Geometry'])
+    set_mat.location = (650, 0)
+    links.new(join.outputs['Geometry'], set_mat.inputs['Geometry'])
     links.new(input_node.outputs['Material'], set_mat.inputs['Material'])
     
     links.new(set_mat.outputs['Geometry'], output_node.inputs['Geometry'])
     
     return tree
 
-def create_road_geonodes_tree():
+def create_road_geonodes_tree(x_min=None, x_max=None, y_min=None, y_max=None):
     group_name = "FlatGIS_Roads"
     if group_name in bpy.data.node_groups:
-        return bpy.data.node_groups[group_name]
+        bpy.data.node_groups.remove(bpy.data.node_groups[group_name])
         
     tree = bpy.data.node_groups.new(group_name, 'GeometryNodeTree')
     
@@ -285,12 +359,20 @@ def create_road_geonodes_tree():
     input_node = nodes.new('NodeGroupInput')
     output_node = nodes.new('NodeGroupOutput')
     input_node.location = (-400, 0)
-    output_node.location = (700, 0)
+    output_node.location = (900, 0)
     
     obj_info = nodes.new('GeometryNodeObjectInfo')
     obj_info.location = (-200, 0)
     obj_info.transform_space = 'RELATIVE'
     links.new(input_node.outputs['Shadow Object'], obj_info.inputs['Object'])
+    
+    current_geometry_output = obj_info.outputs['Geometry']
+    
+    # Implement non-destructive bounding box clip if constraints are valid
+    if x_min is not None and x_max is not None and y_min is not None and y_max is not None:
+        current_geometry_output = add_bounding_box_cropping_nodes(
+            tree, nodes, links, current_geometry_output, x_min, x_max, y_min, y_max
+        )
     
     # Read width attribute
     attr_node = nodes.new('GeometryNodeInputNamedAttribute')
@@ -313,7 +395,7 @@ def create_road_geonodes_tree():
     links.new(input_node.outputs['Default Width'], switch.inputs['False'])
     links.new(attr_node.outputs['Attribute'], switch.inputs['True'])
     
-    # Make profile line coordinates: (-width/2, 0, 0) to (width/2, 0, 0)
+    # Profile Line coordinates Vector Generation
     mult_neg = nodes.new('ShaderNodeMath')
     mult_neg.operation = 'MULTIPLY'
     mult_neg.inputs[1].default_value = -0.5
@@ -339,15 +421,15 @@ def create_road_geonodes_tree():
     links.new(combine_start.outputs['Vector'], profile_line.inputs['Start'])
     links.new(combine_end.outputs['Vector'], profile_line.inputs['End'])
     
-    # Curve to Mesh
+    # Curve to Mesh Conversion
     curve_to_mesh = nodes.new('GeometryNodeCurveToMesh')
-    curve_to_mesh.location = (350, 0)
-    links.new(obj_info.outputs['Geometry'], curve_to_mesh.inputs['Curve'])
+    curve_to_mesh.location = (450, 0)
+    links.new(current_geometry_output, curve_to_mesh.inputs['Curve'])
     links.new(profile_line.outputs['Curve'], curve_to_mesh.inputs['Profile Curve'])
     
     # Set Material
     set_mat = nodes.new('GeometryNodeSetMaterial')
-    set_mat.location = (520, 0)
+    set_mat.location = (650, 0)
     links.new(curve_to_mesh.outputs['Mesh'], set_mat.inputs['Geometry'])
     links.new(input_node.outputs['Material'], set_mat.inputs['Material'])
     
@@ -355,10 +437,10 @@ def create_road_geonodes_tree():
     
     return tree
 
-def create_marker_geonodes_tree():
+def create_marker_geonodes_tree(x_min=None, x_max=None, y_min=None, y_max=None):
     group_name = "FlatGIS_Markers"
     if group_name in bpy.data.node_groups:
-        return bpy.data.node_groups[group_name]
+        bpy.data.node_groups.remove(bpy.data.node_groups[group_name])
         
     tree = bpy.data.node_groups.new(group_name, 'GeometryNodeTree')
     
@@ -374,13 +456,20 @@ def create_marker_geonodes_tree():
     input_node = nodes.new('NodeGroupInput')
     output_node = nodes.new('NodeGroupOutput')
     input_node.location = (-400, 0)
-    output_node.location = (600, 0)
+    output_node.location = (800, 0)
     
     obj_info = nodes.new('GeometryNodeObjectInfo')
     obj_info.location = (-200, 0)
     obj_info.transform_space = 'RELATIVE'
     links.new(input_node.outputs['Shadow Object'], obj_info.inputs['Object'])
     
+    current_geometry_output = obj_info.outputs['Geometry']
+    
+    if x_min is not None and x_max is not None and y_min is not None and y_max is not None:
+        current_geometry_output = add_bounding_box_cropping_nodes(
+            tree, nodes, links, current_geometry_output, x_min, x_max, y_min, y_max
+        )
+        
     inst_info = nodes.new('GeometryNodeObjectInfo')
     inst_info.location = (-200, -200)
     inst_info.transform_space = 'ORIGINAL'
@@ -388,12 +477,12 @@ def create_marker_geonodes_tree():
     
     # Instance on Points
     inst_points = nodes.new('GeometryNodeInstanceOnPoints')
-    inst_points.location = (200, 0)
-    links.new(obj_info.outputs['Geometry'], inst_points.inputs['Points'])
+    inst_points.location = (400, 0)
+    links.new(current_geometry_output, inst_points.inputs['Points'])
     links.new(inst_info.outputs['Geometry'], inst_points.inputs['Instance'])
     
     combine_scale = nodes.new('ShaderNodeCombineXYZ')
-    combine_scale.location = (0, -350)
+    combine_scale.location = (150, -350)
     links.new(input_node.outputs['Scale'], combine_scale.inputs['X'])
     links.new(input_node.outputs['Scale'], combine_scale.inputs['Y'])
     links.new(input_node.outputs['Scale'], combine_scale.inputs['Z'])
@@ -734,10 +823,26 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
     ref_lat = (min_lat + max_lat) / 2.0
     ref_lon = (min_lon + max_lon) / 2.0
     
+    # --- AUTO-DETECT AND FIX SWAPPED LAT/LON FLIPS ---
+    # If ref_lat is outside [-90, 90], or looks like a typical US/European longitude 
+    # while ref_lon looks like a latitude, swap them to protect the cos(lat) calculation.
+    if abs(ref_lat) > 90.0 or (ref_lat < -45.0 and 0.0 < ref_lon < 90.0):
+        print("[FlatGIS] WARNING: Detected flipped Lat/Lon order. Correcting automatically...")
+        min_lat, min_lon = min_lon, min_lat
+        max_lat, max_lon = max_lon, max_lat
+        ref_lat, ref_lon = ref_lon, ref_lat
+    # -------------------------------------------------
+
     lat_to_meters, lon_to_meters = get_projection_factors(ref_lat)
     
+    # Calculate boundary metrics up front before parsing features
+    bound_x_min = (min_lon - ref_lon) * lon_to_meters
+    bound_x_max = (max_lon - ref_lon) * lon_to_meters
+    bound_y_min = (min_lat - ref_lat) * lat_to_meters
+    bound_y_max = (max_lat - ref_lat) * lat_to_meters
+    
     print(f"[FlatGIS] Bounds: Lat({min_lat} to {max_lat}), Lon({min_lon} to {max_lon})")
-    print(f"[FlatGIS] Origin: ({ref_lat}, {ref_lon})")
+    print(f"[FlatGIS] Metric Bounding Box Limits: X({bound_x_min} to {bound_x_max}), Y({bound_y_min} to {bound_y_max})")
     
     # 1. Setup collections
     shadow_coll, visible_coll = setup_collections(context, clear_existing=settings.clear_existing)
@@ -748,10 +853,10 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
     terrain_mat = create_material("FlatGIS_Terrain_Material", color=(0.15, 0.40, 0.15, 1.0), roughness=0.8)
     
     # 3. Import Terrain & Satellite Imagery
-    terrain_x_min = (min_lon - ref_lon) * lon_to_meters
-    terrain_y_min = (min_lat - ref_lat) * lat_to_meters
-    terrain_x_max = (max_lon - ref_lon) * lon_to_meters
-    terrain_y_max = (max_lat - ref_lat) * lat_to_meters
+    terrain_x_min = bound_x_min
+    terrain_y_min = bound_y_min
+    terrain_x_max = bound_x_max
+    terrain_y_max = bound_y_max
     
     satellite_ready = False
     satellite_img_path = ""
@@ -820,11 +925,6 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
         geonode_tree = create_terrain_geonodes_tree()
         mod.node_group = geonode_tree
         
-        #geonode_tree.nodes['Group Input'].inputs['Shadow Object'] = shadow_terrain_obj
-        #geonode_tree.nodes['Group Input'].inputs['Material'] = terrain_mat
-        #set_geonode_modifier_input(mod, geonode_tree, "Shadow Object", shadow_terrain_obj)
-        #set_geonode_modifier_input(mod, geonode_tree, "Material", terrain_mat)
-        
     # 4. Parse Features
     print("[FlatGIS] Parsing GeoJSON features...")
     buildings_list = []
@@ -870,11 +970,13 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
         if not coords:
             continue
             
+        # ALL geographic paths are pulled directly without simplification algorithms or vertex cleanup loops.
         if geom_type == 'Polygon' and settings.import_buildings and is_building:
             rings = []
             for ring in coords:
                 ring_projected = []
                 for lon, lat in ring:
+                    # Scaling applied explicitly inside localized origin window *before* mapping vertex features
                     x = (lon - ref_lon) * lon_to_meters
                     y = (lat - ref_lat) * lat_to_meters
                     ring_projected.append((x, y))
@@ -976,7 +1078,7 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
         visible_coll.objects.link(visible_obj)
         
         mod = visible_obj.modifiers.new(name="FlatGIS_Buildings", type='NODES')
-        geonode_tree = create_building_geonodes_tree()
+        geonode_tree = create_building_geonodes_tree(bound_x_min, bound_x_max, bound_y_min, bound_y_max)
         mod.node_group = geonode_tree
         
         set_geonode_modifier_input(mod, geonode_tree, "Shadow Object", shadow_obj)
@@ -1008,7 +1110,7 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
         visible_coll.objects.link(visible_obj)
         
         mod = visible_obj.modifiers.new(name="FlatGIS_Roads", type='NODES')
-        geonode_tree = create_road_geonodes_tree()
+        geonode_tree = create_road_geonodes_tree(bound_x_min, bound_x_max, bound_y_min, bound_y_max)
         mod.node_group = geonode_tree
         
         set_geonode_modifier_input(mod, geonode_tree, "Shadow Object", shadow_obj)
@@ -1037,13 +1139,20 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
             visible_coll.objects.link(visible_obj)
             
             mod = visible_obj.modifiers.new(name=f"FlatGIS_Markers_{m_type}", type='NODES')
-            geonode_tree = create_marker_geonodes_tree()
+            geonode_tree = create_marker_geonodes_tree(bound_x_min, bound_x_max, bound_y_min, bound_y_max)
             mod.node_group = geonode_tree
             
-            #set_geonode_modifier_input(mod, geonode_tree, "Shadow Object", shadow_obj)
-            #set_geonode_modifier_input(mod, geonode_tree, "Instance Object", default_marker_obj)
-            #set_geonode_modifier_input(mod, geonode_tree, "Scale", 1.0)
+            set_geonode_modifier_input(mod, geonode_tree, "Shadow Object", shadow_obj)
+            set_geonode_modifier_input(mod, geonode_tree, "Instance Object", default_marker_obj)
+            set_geonode_modifier_input(mod, geonode_tree, "Scale", 1.0)
             
+    # Force viewport update and redraw the UI region immediately
+    bpy.context.view_layer.update()
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+                
     print("[FlatGIS] Import pipeline complete!")
 
 
