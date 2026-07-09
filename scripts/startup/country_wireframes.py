@@ -1549,6 +1549,7 @@ def _osm_presets_map():
         "LANDUSE": "landuse,natural",
         "POI": "amenity,shop,tourism",
         "BOUNDARIES": "boundary=administrative",
+        "ALL": "building,highway,waterway,natural=water,landuse,natural,amenity,shop,tourism,boundary=administrative",
     }
 
 
@@ -2580,6 +2581,7 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
                 "Boundaries",
                 "Administrative and political boundaries",
             ),
+            ("ALL", "All", "All other presets"),
         ),
         default="BUILDINGS",
     )
