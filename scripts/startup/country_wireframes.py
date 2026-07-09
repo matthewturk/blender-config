@@ -273,6 +273,20 @@ def _resolve_blue_marble_url(raw_url):
     return url
 
 
+def _latlon_to_xy(lat_deg, lon_deg, scale):
+    return (lon_deg * scale, lat_deg * scale, 0.0)
+
+
+def _latlon_to_xy_with_bounds(lat_deg, lon_deg, scale, bounds=None):
+    if bounds is None:
+        return _latlon_to_xy(lat_deg, lon_deg, scale)
+
+    min_lon, min_lat, max_lon, max_lat = bounds
+    aspect = (max_lat - min_lat)/(max_lon - min_lon)
+    return ((lon_deg - min_lon)/(max_lon - min_lon) * scale,
+            (lat_deg - min_lat)/(max_lat - min_lat) * scale, 0.0)
+
+
 def _latlon_to_xyz(lat_deg, lon_deg, radius):
     lat = math.radians(lat_deg)
     lon = math.radians(lon_deg)
@@ -383,6 +397,111 @@ def _line_coords_to_xyz(coords, globe_radius, max_segment_deg=0.0):
         prev_unit = curr_unit
 
     return points
+
+
+def _line_coords_to_latlon_xy(coords, scale, max_segment_deg=0.0):
+    if not coords:
+        return []
+
+    try:
+        lon0, lat0, *_ = coords[0]
+    except Exception:
+        return []
+
+    points = [_latlon_to_xy(lat0, lon0, scale)]
+
+    for coord in coords[1:]:
+        try:
+            lon1, lat1, *_ = coord
+        except Exception:
+            continue
+
+        delta_lon = lon1 - lon0
+        if delta_lon > 180.0:
+            delta_lon -= 360.0
+        elif delta_lon < -180.0:
+            delta_lon += 360.0
+
+        delta_lat = lat1 - lat0
+        segments = 1
+        if max_segment_deg > 0.0:
+            arc_deg = max(abs(delta_lon), abs(delta_lat))
+            if arc_deg > max_segment_deg:
+                segments = int(math.ceil(arc_deg / max_segment_deg))
+
+        for step in range(1, segments + 1):
+            t = step / segments
+            lon = lon0 + delta_lon * t
+            lat = lat0 + delta_lat * t
+            points.append(_latlon_to_xy(lat, lon, scale))
+
+        lon0 = lon1
+        lat0 = lat1
+
+    return points
+
+
+def _merge_lonlat_bounds(bounds, lon, lat):
+    if lon is None or lat is None:
+        return bounds
+
+    lon = float(lon)
+    lat = float(lat)
+    if bounds is None:
+        return (lon, lat, lon, lat)
+
+    min_lon, min_lat, max_lon, max_lat = bounds
+    return (
+        min(min_lon, lon),
+        min(min_lat, lat),
+        max(max_lon, lon),
+        max(max_lat, lat),
+    )
+
+
+def _merge_bounds(bounds, other_bounds):
+    if other_bounds is None:
+        return bounds
+    min_lon, min_lat, max_lon, max_lat = other_bounds
+    bounds = _merge_lonlat_bounds(bounds, min_lon, min_lat)
+    bounds = _merge_lonlat_bounds(bounds, max_lon, max_lat)
+    return bounds
+
+
+def _bounds_from_coord_sequence(coords):
+    bounds = None
+    for coord in coords:
+        lonlat = _coord_to_lonlat(coord)
+        if lonlat is None:
+            continue
+        lon, lat = lonlat
+        bounds = _merge_lonlat_bounds(bounds, lon, lat)
+    return bounds
+
+
+def _bounds_from_geometry(geometry):
+    try:
+        min_lon, min_lat, max_lon, max_lat = geometry.bounds
+    except Exception:
+        return None
+
+    if None in (min_lon, min_lat, max_lon, max_lat):
+        return None
+    return (float(min_lon), float(min_lat), float(max_lon), float(max_lat))
+
+
+def _bounds_from_geojson_payload(payload):
+    bounds = None
+    for feature in payload:
+        for line in feature.get("lines", []):
+            bounds = _merge_bounds(bounds, _bounds_from_coord_sequence(line))
+        for point in feature.get("points", []):
+            lonlat = _coord_to_lonlat(point)
+            if lonlat is None:
+                continue
+            lon, lat = lonlat
+            bounds = _merge_lonlat_bounds(bounds, lon, lat)
+    return bounds
 
 
 def _coords_lonlat_equal(coord_a, coord_b, epsilon=1e-12):
@@ -586,7 +705,66 @@ def _line_coords_to_simplified_xyz(
     globe_radius,
     max_segment_deg=0.0,
     spherical_tolerance_deg=0.0,
+    use_latlon_space=False,
+    latlon_scale=1.0,
+    latlon_bounds=None,
 ):
+    if use_latlon_space:
+        if spherical_tolerance_deg > 0.0:
+            coords = _simplify_line_coords(coords, spherical_tolerance_deg)
+        if latlon_bounds is not None:
+            points = []
+            if coords:
+                try:
+                    lon0, lat0, *_ = coords[0]
+                except Exception:
+                    return []
+                points.append(
+                    _latlon_to_xy_with_bounds(lat0, lon0, latlon_scale, latlon_bounds)
+                )
+
+                for coord in coords[1:]:
+                    try:
+                        lon1, lat1, *_ = coord
+                    except Exception:
+                        continue
+
+                    delta_lon = lon1 - lon0
+                    if delta_lon > 180.0:
+                        delta_lon -= 360.0
+                    elif delta_lon < -180.0:
+                        delta_lon += 360.0
+
+                    delta_lat = lat1 - lat0
+                    segments = 1
+                    if max_segment_deg > 0.0:
+                        arc_deg = max(abs(delta_lon), abs(delta_lat))
+                        if arc_deg > max_segment_deg:
+                            segments = int(math.ceil(arc_deg / max_segment_deg))
+
+                    for step in range(1, segments + 1):
+                        t = step / segments
+                        lon = lon0 + delta_lon * t
+                        lat = lat0 + delta_lat * t
+                        points.append(
+                            _latlon_to_xy_with_bounds(
+                                lat,
+                                lon,
+                                latlon_scale,
+                                latlon_bounds,
+                            )
+                        )
+
+                    lon0 = lon1
+                    lat0 = lat1
+            return points
+
+        return _line_coords_to_latlon_xy(
+            coords,
+            latlon_scale,
+            max_segment_deg=max_segment_deg,
+        )
+
     points = _line_coords_to_xyz(
         coords,
         globe_radius,
@@ -919,6 +1097,9 @@ def _create_boundary_wire_object_from_lines(
     iso3,
     max_segment_deg=0.0,
     spherical_tolerance_deg=0.0,
+    use_latlon_space=False,
+    latlon_scale=1.0,
+    latlon_bounds=None,
 ):
     vertices = []
     edges = []
@@ -930,6 +1111,9 @@ def _create_boundary_wire_object_from_lines(
             globe_radius,
             max_segment_deg=max_segment_deg,
             spherical_tolerance_deg=spherical_tolerance_deg,
+            use_latlon_space=use_latlon_space,
+            latlon_scale=latlon_scale,
+            latlon_bounds=latlon_bounds,
         )
         if len(local_points) < 2:
             continue
@@ -970,6 +1154,9 @@ def _create_curve_outline_object_from_lines(
     max_segment_deg=0.0,
     spherical_tolerance_deg=0.0,
     spline_type="NURBS",
+    use_latlon_space=False,
+    latlon_scale=1.0,
+    latlon_bounds=None,
 ):
     curve_data = bpy.data.curves.new(f"{obj_name}_Curve", type="CURVE")
     curve_data.dimensions = "3D"
@@ -992,6 +1179,9 @@ def _create_curve_outline_object_from_lines(
             globe_radius,
             max_segment_deg=max_segment_deg,
             spherical_tolerance_deg=spherical_tolerance_deg,
+            use_latlon_space=use_latlon_space,
+            latlon_scale=latlon_scale,
+            latlon_bounds=latlon_bounds,
         )
         if len(points) < 2:
             continue
@@ -1039,6 +1229,19 @@ def _coord_to_lonlat(coord):
         return None
 
 
+def _scene_location_from_lonlat(lat_deg, lon_deg, settings, globe_radius, bounds=None):
+    if settings.use_latlon_coordinates:
+        if settings.latlon_fit_to_bbox:
+            return _latlon_to_xy_with_bounds(
+                lat_deg,
+                lon_deg,
+                settings.latlon_coordinate_scale,
+                bounds=bounds,
+            )
+        return _latlon_to_xy(lat_deg, lon_deg, settings.latlon_coordinate_scale)
+    return _latlon_to_xyz(lat_deg, lon_deg, globe_radius)
+
+
 def _create_geojson_point_object(
     collection,
     obj_name,
@@ -1082,6 +1285,9 @@ def _import_geojson_feature_payload(context, settings, payload, source_label):
     overlay_radius = settings.globe_radius * (1.0 + settings.overlay_offset)
     line_created = 0
     point_created = 0
+    use_latlon_space = bool(settings.use_latlon_coordinates)
+    latlon_scale = float(settings.latlon_coordinate_scale)
+    latlon_bounds = _bounds_from_geojson_payload(payload) if settings.latlon_fit_to_bbox else None
 
     sphere_mesh = None
     if settings.geojson_point_mode == "SPHERE":
@@ -1138,6 +1344,9 @@ def _import_geojson_feature_payload(context, settings, payload, source_label):
                     max_segment_deg=settings.geojson_curve_step_deg,
                     spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
                     spline_type=settings.geojson_curve_spline_type,
+                    use_latlon_space=use_latlon_space,
+                    latlon_scale=latlon_scale,
+                    latlon_bounds=latlon_bounds,
                 )
             else:
                 line_obj = _create_boundary_wire_object_from_lines(
@@ -1152,6 +1361,9 @@ def _import_geojson_feature_payload(context, settings, payload, source_label):
                     iso3="",
                     max_segment_deg=settings.geojson_curve_step_deg,
                     spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
+                    use_latlon_space=use_latlon_space,
+                    latlon_scale=latlon_scale,
+                    latlon_bounds=latlon_bounds,
                 )
 
             if line_obj is not None:
@@ -1169,7 +1381,13 @@ def _import_geojson_feature_payload(context, settings, payload, source_label):
                 continue
 
             lon, lat = lonlat
-            location = _latlon_to_xyz(lat, lon, overlay_radius)
+            location = _scene_location_from_lonlat(
+                lat,
+                lon,
+                settings,
+                overlay_radius,
+                bounds=latlon_bounds,
+            )
             point_name = f"GeoJSONPoint_{object_suffix}_{point_index:04d}"
             point_obj = _create_geojson_point_object(
                 collection=feature_coll,
@@ -1306,6 +1524,7 @@ def _fetch_osm_geojson_with_osmnx(settings):
         ) from exc
 
     south, west, north, east = _parse_osm_bbox(settings.osm_bbox)
+    print("SWNE", south, west, north, east)
     tags = _osm_tags_dict_from_filters(settings.osm_tag_filters)
     if not tags:
         tags = {"building": True}
@@ -1317,10 +1536,11 @@ def _fetch_osm_geojson_with_osmnx(settings):
         pass
 
     gdf = None
+
     fetch_attempts = [
-        lambda: ox.features_from_bbox(north, south, east, west, tags),
-        lambda: ox.features.features_from_bbox((north, south, east, west), tags),
         lambda: ox.features.features_from_bbox((west, south, east, north), tags),
+        # lambda: ox.features_from_bbox(north, south, east, west, tags),
+        # lambda: ox.features.features_from_bbox((north, south, east, west), tags),
     ]
 
     fetch_error = None
@@ -1506,6 +1726,9 @@ def _create_boundary_wire_object(
     iso3,
     max_segment_deg=0.0,
     spherical_tolerance_deg=0.0,
+    use_latlon_space=False,
+    latlon_scale=1.0,
+    latlon_bounds=None,
 ):
     return _create_boundary_wire_object_from_lines(
         collection=collection,
@@ -1519,6 +1742,9 @@ def _create_boundary_wire_object(
         iso3=iso3,
         max_segment_deg=max_segment_deg,
         spherical_tolerance_deg=spherical_tolerance_deg,
+        use_latlon_space=use_latlon_space,
+        latlon_scale=latlon_scale,
+        latlon_bounds=latlon_bounds,
     )
 
 
@@ -2068,6 +2294,32 @@ class OBJECT_OT_select_none_geo_countries(bpy.types.Operator):
 
 
 class CountryWireframeSettings(bpy.types.PropertyGroup):
+    use_latlon_coordinates: bpy.props.BoolProperty(
+        name="Use Lat/Lon Coordinates",
+        description=(
+            "Import wireframes and points in a flat lon/lat space instead of "
+            "projecting onto the globe"
+        ),
+        default=False,
+    )
+    latlon_coordinate_scale: bpy.props.FloatProperty(
+        name="Lat/Lon Scale",
+        description=(
+            "Multiplier applied to lon/lat coordinates when importing in flat "
+            "lat/lon space"
+        ),
+        default=0.1,
+        min=0.000001,
+        soft_max=1.0,
+    )
+    latlon_fit_to_bbox: bpy.props.BoolProperty(
+        name="Fit to Bounds",
+        description=(
+            "Shift unprojected lon/lat imports to the source bounds so the "
+            "result keeps the correct aspect ratio in a compact box"
+        ),
+        default=False,
+    )
     generation_mode: bpy.props.EnumProperty(
         name="Mode",
         description="Generate true boundary wireframes or marker spheres",
@@ -2730,6 +2982,26 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
             0.0001,
         )
 
+        selected_country_rows = []
+        for token in country_tokens:
+            row = country_lookup.get(token.lower())
+            if row is not None:
+                selected_country_rows.append(row)
+
+        selected_continents = set(name.lower() for name in continent_tokens if name.strip())
+        selected_continent_items = []
+        for item in continents_lookup.values():
+            if selected_continents and item["name"].lower() not in selected_continents:
+                continue
+            selected_continent_items.append(item)
+
+        latlon_bounds = None
+        if settings.use_latlon_coordinates and settings.latlon_fit_to_bbox:
+            for row in selected_country_rows:
+                latlon_bounds = _merge_bounds(latlon_bounds, _bounds_from_geometry(row.geometry))
+            for item in selected_continent_items:
+                latlon_bounds = _merge_bounds(latlon_bounds, _bounds_from_geometry(item.get("geometry")))
+
         root = _get_or_create_collection(
             context.scene.collection,
             "Geo Wireframes",
@@ -2807,7 +3079,13 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                 point = row.geometry.representative_point()
                 lat = point.y
                 lon = point.x
-                location = _latlon_to_xyz(lat, lon, overlay_radius)
+                location = _scene_location_from_lonlat(
+                    lat,
+                    lon,
+                    settings,
+                    overlay_radius,
+                    bounds=latlon_bounds,
+                )
                 name = str(row["name"])
                 continent_name = str(row["continent"])
                 iso2 = str(row["iso_a2"])
@@ -2824,6 +3102,9 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         continent_name=continent_name,
                         iso2=iso2,
                         iso3=iso3,
+                        use_latlon_space=settings.use_latlon_coordinates,
+                        latlon_scale=settings.latlon_coordinate_scale,
+                        latlon_bounds=latlon_bounds,
                     )
                     if created_obj is None:
                         missing.append(token)
@@ -2855,22 +3136,18 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                 created += 1
 
         if settings.continents_enabled:
-            selected_continents = set(
-                name.lower() for name in continent_tokens if name.strip()
-            )
-            continent_items = list(continents_lookup.values())
-            for item in continent_items:
+            for item in selected_continent_items:
                 continent_name = item["name"]
-                if (
-                    selected_continents
-                    and continent_name.lower() not in selected_continents
-                ):
-                    continue
-
                 point = item["point"]
                 lat = point.y
                 lon = point.x
-                location = _latlon_to_xyz(lat, lon, overlay_radius)
+                location = _scene_location_from_lonlat(
+                    lat,
+                    lon,
+                    settings,
+                    overlay_radius,
+                    bounds=latlon_bounds,
+                )
 
                 if settings.generation_mode == "BOUNDARY":
                     created_obj = _create_boundary_wire_object(
@@ -2883,6 +3160,9 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         continent_name=continent_name,
                         iso2="",
                         iso3="",
+                        use_latlon_space=settings.use_latlon_coordinates,
+                        latlon_scale=settings.latlon_coordinate_scale,
+                        latlon_bounds=latlon_bounds,
                     )
                     if created_obj is None:
                         continue
@@ -3024,6 +3304,12 @@ class VIEW3D_PT_country_wireframes(bpy.types.Panel):
         build_box.prop(settings, "globe_radius")
         build_box.prop(settings, "create_reference_globe")
         build_box.prop(settings, "overlay_offset")
+        coord_box = build_box.box()
+        coord_box.label(text="Coordinate Space")
+        coord_box.prop(settings, "use_latlon_coordinates")
+        if settings.use_latlon_coordinates:
+            coord_box.prop(settings, "latlon_coordinate_scale")
+            coord_box.prop(settings, "latlon_fit_to_bbox")
         build_box.prop(settings, "resolution")
         build_box.prop(settings, "marker_scale")
         build_box.prop(settings, "continent_scale")
