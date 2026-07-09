@@ -282,10 +282,25 @@ def _latlon_to_xy_with_bounds(lat_deg, lon_deg, scale, bounds=None):
         return _latlon_to_xy(lat_deg, lon_deg, scale)
 
     min_lon, min_lat, max_lon, max_lat = bounds
-    aspect = (max_lat - min_lat)/(max_lon - min_lon)
-    return ((lon_deg - min_lon)/(max_lon - min_lon) * scale,
-            (lat_deg - min_lat)/(max_lat - min_lat) * scale, 0.0)
+    
+    lon_span = max_lon - min_lon
+    lat_span = max_lat - min_lat
+    
+    if lon_span <= 0 or lat_span <= 0:
+        return (0.0, 0.0, 0.0)
 
+    # 1. Calculate the scaling factor for longitude at this specific latitude
+    center_lat = math.radians((min_lat + max_lat) / 2.0)
+    cos_lat = math.cos(center_lat)
+    
+    # 2. Map X directly using the uniform scale baseline
+    x = ((lon_deg - min_lon) / lon_span) * scale
+    
+    # 3. Correct the Y scale: Because horizontal degrees are smaller by a factor of cos_lat, 
+    # a vertical degree is physically larger. We multiply by cos_lat to scale the Y coordinate accurately.
+    y = (((lat_deg - min_lat) / lon_span) * scale) * cos_lat
+    
+    return (x, y, 0.0)
 
 def _latlon_to_xyz(lat_deg, lon_deg, radius):
     lat = math.radians(lat_deg)
@@ -938,29 +953,52 @@ def _iter_geojson_point_coords(geometry):
         for sub in geometry.get("geometries", []):
             yield from _iter_geojson_point_coords(sub)
 
-
 def _feature_name_from_properties(properties, fallback):
     if not isinstance(properties, dict):
         return fallback
 
-    candidates = (
-        "name",
-        "NAME",
-        "Name",
-        "admin",
-        "ADMIN",
-        "id",
-        "ID",
-    )
-    for key in candidates:
-        value = properties.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return fallback
+    # Helper function to ensure we skip empty values or literal 'None' strings
+    def clean_val(key):
+        val = properties.get(key)
+        if val is None:
+            return None
+        s = str(val).strip()
+        if s == "" or s.lower() == "none":
+            return None
+        return s
 
+    # 1. Primary Check: Look for an explicit individual name
+    name_candidates = ("name", "NAME", "Name", "name:en", "official_name")
+    for key in name_candidates:
+        valid_name = clean_val(key)
+        if valid_name:
+            return valid_name
+
+    # 2. Secondary Check: Build from a street address if available
+    housenumber = clean_val("addr:housenumber")
+    street = clean_val("addr:street")
+    if housenumber and street:
+        return f"{housenumber} {street}"
+    elif street:
+        return street
+
+    # 3. Tertiary Check: Use structural types if no location address exists
+    type_candidates = ("building", "highway", "amenity", "landuse", "natural")
+    for key in type_candidates:
+        valid_type = clean_val(key)
+        if valid_type:
+            if valid_type.lower() == "yes":
+                return key.capitalize()
+            return f"{key.capitalize()}: {valid_type}"
+
+    # 4. Fallback to basic identifier properties
+    admin_candidates = ("admin", "ADMIN", "id", "ID")
+    for key in admin_candidates:
+        valid_id = clean_val(key)
+        if valid_id:
+            return valid_id
+
+    return fallback
 
 def _safe_object_name(text, fallback="Feature"):
     value = str(text).strip()
@@ -2477,7 +2515,7 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
             ("BEZIER", "Bezier", "Bezier splines with auto handles"),
             ("POLY", "Poly", "Polyline curve matching sampled points"),
         ),
-        default="NURBS",
+        default="POLY",
     )
     geojson_spherical_tolerance_deg: bpy.props.FloatProperty(
         name="Sphere Tol (deg)",
