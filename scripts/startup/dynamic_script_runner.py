@@ -89,11 +89,6 @@ def create_blender_props(params_dict):
             props[key] = bpy.props.StringProperty(
                 name=p_name, description=p_desc, default=spec.get("default", "")
             )
-        elif p_type == "ENUM":
-            props[key] = bpy.props.EnumProperty(
-                name=p_name, description=p_desc,
-                items=spec.get("items", []), default=spec.get("default")
-            )
         elif p_type == "COLOR":
             # Determines float array length based on default length (RGB vs RGBA)
             default_val = spec.get("default", (1.0, 1.0, 1.0, 1.0))
@@ -130,6 +125,71 @@ def create_blender_props(params_dict):
                 default=spec.get("default", ""),
                 subtype='DIR_PATH'  # Natively spawns a folder browser button
             )
+        # Multi-Object generic class target matching
+        elif p_type == "POINTER":
+            target_str = spec.get("target", "Object")
+            target_cls = getattr(bpy.types, target_str, bpy.types.Object)
+            props[key] = bpy.props.PointerProperty(
+                name=p_name, description=p_desc, type=target_cls
+            )
+            
+        # Integer coordinate vectors (like dimensions or indices arrays)
+        elif p_type == "INT_VECTOR":
+            default_val = spec.get("default", (0, 0, 0))
+            props[key] = bpy.props.IntVectorProperty(
+                name=p_name, description=p_desc, 
+                default=default_val, size=len(default_val)
+            )
+            
+        # Numerical Property Units (Aesthetic formatting mappings)
+        elif p_type in {"FLOAT", "INT"} and "unit" in spec:
+            prop_factory = bpy.props.FloatProperty if p_type == "FLOAT" else bpy.props.IntProperty
+            props[key] = prop_factory(
+                name=p_name, description=p_desc,
+                default=spec.get("default", 0.0 if p_type == "FLOAT" else 0),
+                unit=spec["unit"] # Automatically maps 'LENGTH', 'ROTATION', or 'TIME'
+            )
+        # Enum Multi-Select Handling (Converting the list options)
+        elif p_type == "ENUM":
+            # Coerce the user-provided options into a true python set
+            raw_options = spec.get("options", set())
+            if isinstance(raw_options, (list, tuple)):
+                options_set = set(raw_options)
+            elif isinstance(raw_options, set):
+                options_set = raw_options
+            else:
+                options_set = set()
+
+            if "ENUM_FLAG" in options_set:
+                # ENUM_FLAG requires options to be a SET and default to be a SET
+                raw_default = spec.get("default", set())
+                if isinstance(raw_default, (list, tuple)):
+                    default_val = set(raw_default)
+                elif isinstance(raw_default, set):
+                    default_val = raw_default
+                else:
+                    default_val = {str(raw_default)} if raw_default else set()
+
+                props[key] = bpy.props.EnumProperty(
+                    name=p_name,
+                    description=p_desc,
+                    items=spec.get("items", []),
+                    options=options_set,
+                    default=default_val
+                )
+            else:
+                # Standard dropdown requires default to be a single string or integer
+                default_val = spec.get("default", "")
+                if isinstance(default_val, (set, list, tuple)):
+                    # Fallback safely to the first element if the user accidentally passed an array/set
+                    default_val = list(default_val)[0] if default_val else ""
+                
+                props[key] = bpy.props.EnumProperty(
+                    name=p_name,
+                    description=p_desc,
+                    items=spec.get("items", []),
+                    default=str(default_val)
+                )
     return props
 
 def make_dynamic_operator(script_name, mod):
@@ -262,7 +322,6 @@ class OBJECT_PT_dynamic_script_runner(bpy.types.Panel):
         selected = props.selected_script
         if selected in SCRIPT_REGISTRY:
             op_idname = f"script_runner.dynamic_{selected.lower()}"
-            print(op_idname)
             
             box = layout.box()
             nice_name = selected.replace('_', ' ').title()

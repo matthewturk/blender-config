@@ -79,6 +79,87 @@ PARAMS = {
         "default": "/tmp", 
         "name": "Output Directory",
         "description": "Select where generated asset logs should be saved"
+    },
+    "target_material": {
+        "type": "POINTER",
+        "target": "Material",
+        "name": "Surface Material",
+        "description": "Material to apply to generated geometry surfaces"
+    },
+    "target_image": {
+        "type": "POINTER",
+        "target": "Image",
+        "name": "Texture Map",
+        "description": "Image data block to feed into shader nodes"
+    },
+    "target_text_block": {
+        "type": "POINTER",
+        "target": "Text",
+        "name": "Configuration Script",
+        "description": "An internal .txt or .py file containing procedural parameters"
+    },
+    "source_scene": {
+        "type": "POINTER",
+        "target": "Scene",
+        "name": "Link Elements From",
+        "description": "Scene data block to look into for master instances"
+    },
+    
+    # 2. Hard Disk File I/O Pickers
+    "import_path": {
+        "type": "FILE_PATH",
+        "default": "//assets_manifest.json",
+        "name": "Asset Manifest File",
+        "description": "Path to the configuration spreadsheet or tracking log"
+    },
+    "output_folder": {
+        "type": "DIR_PATH",
+        "default": "/tmp",
+        "name": "Render Export Directory",
+        "description": "Destination directory folder on disk for bake storage"
+    },
+    
+    # 3. Numeric Specializations with Units & Coordinates
+    "voxel_resolution": {
+        "type": "INT_VECTOR",
+        "default": (128, 128, 64),
+        "name": "Voxel Grid Dimensions",
+        "description": "Bounding box subdivision sizes along XYZ axes"
+    },
+    "spawn_radius": {
+        "type": "FLOAT",
+        "default": 2.5,
+        "unit": "LENGTH", # Spawns meters/feet marks dynamically in UI
+        "name": "Scatter Margin",
+        "description": "Distance parameter translated directly to scene scale units"
+    },
+    "rotation_offset": {
+        "type": "FLOAT",
+        "default": 1.5708, # Pi/2 radians
+        "unit": "ROTATION", # Automatically displays as degrees (90°) in UI
+        "name": "Anisotropic Spin",
+        "description": "Internal radian multiplier converted to rotational visual feedback"
+    },
+    "simulation_duration": {
+        "type": "FLOAT",
+        "default": 5.0,
+        "unit": "TIME", # Automatically appends 's' (seconds) or frame counts
+        "name": "Bake Duration",
+        "description": "Total active life envelope window duration"
+    },
+    
+    # 4. Multi-Select Enum Checklist Flags
+    "render_passes": {
+        "type": "ENUM",
+        "default": {"COMBINED", "DIFFUSE"}, # Python Set wrapper
+        "options": {"ENUM_FLAG"},           # Python Set containing the flag string
+        "items": [
+            ("COMBINED", "Combined Beauty", "Render complete pass stack output"),
+            ("DIFFUSE", "Diffuse Component", "Render albedo/color illumination details"),
+            ("GLOSSY", "Glossy Specular", "Isolate reflections vectors"),
+            ("EMISSION", "Emission Pass", "Isolate glow luminosity maps")
+        ],
+        "name": "Active Engine Buffers"
     }
 }
 
@@ -101,6 +182,30 @@ def execute(context, params):
     dest_collection = params["target_collection"]
     raw_file_path = params["import_source"]
     raw_dir_path = params["export_destination"]
+    
+    # 2. Inspect In-Scene Pointer ID Objects
+    mat = params["target_material"]
+    img = params["target_image"]
+    txt = params["target_text_block"]
+    scn = params["source_scene"]
+    
+    print(f"[Data Blocks] Material Linked: {mat.name if mat else 'None'}")
+    print(f"[Data Blocks] Texture Image Linked: {img.name if img else 'None'}")
+    print(f"[Data Blocks] Text Config Linked: {txt.name if txt else 'None'}")
+    print(f"[Data Blocks] Source Scene Linked: {scn.name if scn else 'None'}")
+    
+    # 3. Handle Special Math Vectors and Unit Quantities
+    dimensions = params["voxel_resolution"]
+    radius = params["spawn_radius"]
+    rot = params["rotation_offset"]
+    duration = params["simulation_duration"]
+    
+    print(f"[Math Config] Grid Structure Arrays: {list(dimensions)}")
+    print(f"[Math Config] Distance Scalar: {radius}m | Angle: {rot} rad | Envelope: {duration}s")
+    
+    # 4. Handle Active Multi-select Sets
+    active_passes = params["render_passes"]
+    print(f"[Aesthetics] Multi-Select Checklist Flags Active: {list(active_passes)}")
     
     # Pro-tip: Resolve Blender's relative path prefix (like '//') to absolute paths
     absolute_file = bpy.path.abspath(raw_file_path)
