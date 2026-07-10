@@ -48,7 +48,7 @@ def load_external_scripts():
 
 
 def get_script_items(self, context):
-    return load_external_scripts()
+    return [("None", "", "")] + load_external_scripts()
 
 
 class DynamicScriptSettings(bpy.types.PropertyGroup):
@@ -147,7 +147,8 @@ class SR_OT_reload_scripts(bpy.types.Operator):
             bpy.utils.register_class(op_cls)
             DYNAMIC_CLASSES.append(op_cls)
             
-        context.area.tag_redraw()
+        if getattr(context, "area", None) is not None:
+            context.area.tag_redraw()
         return {'FINISHED'}
 
 
@@ -182,6 +183,11 @@ class OBJECT_PT_dynamic_script_runner(bpy.types.Panel):
             # Clicking it calls `invoke()`, opening the pop-up options window natively.
             box.operator(op_idname, text="Configure & Run", icon='PLAY')
 
+def _reload_scripts():
+    if hasattr(bpy.ops, "script_runner") and hasattr(bpy.ops.script_runner, "reload_scripts"):
+        print("Reloading scripts on startup.")
+        bpy.ops.script_runner.reload_scripts()
+    return None
 
 def register():
     bpy.utils.register_class(DynamicScriptSettings)
@@ -189,6 +195,7 @@ def register():
     bpy.utils.register_class(OBJECT_PT_dynamic_script_runner)
     
     bpy.types.Scene.dynamic_script_runner = bpy.props.PointerProperty(type=DynamicScriptSettings)
+    bpy.app.timers.register(_reload_scripts, first_interval=1.0)
 
 def unregister():
     global DYNAMIC_CLASSES
