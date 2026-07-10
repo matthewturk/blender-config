@@ -1,6 +1,6 @@
 bl_info = {
     "name": "Dynamic Script Runner with Hot-Reload",
-    "author": "Your Name",
+    "author": "Matthew Turk",
     "version": (1, 3),
     "blender": (4, 2, 0),
     "category": "Development",
