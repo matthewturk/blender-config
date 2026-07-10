@@ -1,4 +1,5 @@
 import bpy
+import os
 
 # Comprehensive parameter dictionary mapping standard UI types to Blender properties
 PARAMS = {
@@ -66,6 +67,18 @@ PARAMS = {
         "default": None, 
         "name": "Target Collection",
         "description": "The scene collection where new elements will be organized"
+    },
+    "import_source": {
+        "type": "FILE_PATH", 
+        "default": "//data.json", 
+        "name": "Source File",
+        "description": "Select the target file to parse"
+    },
+    "export_destination": {
+        "type": "DIR_PATH", 
+        "default": "/tmp", 
+        "name": "Output Directory",
+        "description": "Select where generated asset logs should be saved"
     }
 }
 
@@ -86,6 +99,21 @@ def execute(context, params):
     # (Expects actual bpy.types.Object / Collection references passed by your runner)
     source_obj = params["target_object"]
     dest_collection = params["target_collection"]
+    raw_file_path = params["import_source"]
+    raw_dir_path = params["export_destination"]
+    
+    # Pro-tip: Resolve Blender's relative path prefix (like '//') to absolute paths
+    absolute_file = bpy.path.abspath(raw_file_path)
+    absolute_dir = bpy.path.abspath(raw_dir_path)
+    
+    print("\n--- Running File I/O Script ---")
+    print(f"Targeting File: {absolute_file}")
+    print(f"Targeting Directory: {absolute_dir}")
+    
+    if os.path.exists(absolute_file):
+        print("File verified on disk.")
+    else:
+        print("File does not exist yet; setting up initialization rules.")
     
     # Log configuration summary to the console
     print("\n--- Executing Comprehensive Script Runner ---")

@@ -116,7 +116,20 @@ def create_blender_props(params_dict):
             props[key] = bpy.props.PointerProperty(
                 name=p_name, description=p_desc, type=bpy.types.Collection
             )
-            
+        elif p_type == "FILE_PATH":
+            props[key] = bpy.props.StringProperty(
+                name=p_name, 
+                description=p_desc, 
+                default=spec.get("default", ""),
+                subtype='FILE_PATH' # Natively spawns a file browser button
+            )
+        elif p_type == "DIR_PATH":
+            props[key] = bpy.props.StringProperty(
+                name=p_name, 
+                description=p_desc, 
+                default=spec.get("default", ""),
+                subtype='DIR_PATH'  # Natively spawns a folder browser button
+            )
     return props
 
 def make_dynamic_operator(script_name, mod):
