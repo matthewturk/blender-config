@@ -48,7 +48,7 @@ def load_external_scripts():
 
 
 def get_script_items(self, context):
-    return [("None", "", "")] + load_external_scripts()
+    return load_external_scripts()
 
 
 class DynamicScriptSettings(bpy.types.PropertyGroup):
@@ -58,6 +58,64 @@ class DynamicScriptSettings(bpy.types.PropertyGroup):
         items=get_script_items
     )
 
+def create_blender_props(params_dict):
+    """Maps custom PARAMS configurations to registered bpy.props factories."""
+    props = {}
+    
+    for key, spec in params_dict.items():
+        p_type = spec.get("type")
+        p_name = spec.get("name", key)
+        p_desc = spec.get("description", "")
+        
+        if p_type == "INT":
+            props[key] = bpy.props.IntProperty(
+                name=p_name, description=p_desc,
+                default=spec.get("default", 0),
+                min=spec.get("min", -2147483648), max=spec.get("max", 2147483647)
+            )
+        elif p_type == "FLOAT":
+            props[key] = bpy.props.FloatProperty(
+                name=p_name, description=p_desc,
+                default=spec.get("default", 0.0),
+                min=spec.get("min", -3.402823e+38), max=spec.get("max", 3.402823e+38)
+            )
+        elif p_type == "BOOL":
+            props[key] = bpy.props.BoolProperty(
+                name=p_name, description=p_desc, default=spec.get("default", False)
+            )
+        elif p_type == "STRING":
+            props[key] = bpy.props.StringProperty(
+                name=p_name, description=p_desc, default=spec.get("default", "")
+            )
+        elif p_type == "ENUM":
+            props[key] = bpy.props.EnumProperty(
+                name=p_name, description=p_desc,
+                items=spec.get("items", []), default=spec.get("default")
+            )
+        elif p_type == "COLOR":
+            # Determines float array length based on default length (RGB vs RGBA)
+            default_val = spec.get("default", (1.0, 1.0, 1.0, 1.0))
+            props[key] = bpy.props.FloatVectorProperty(
+                name=p_name, description=p_desc,
+                default=default_val, size=len(default_val),
+                subtype='COLOR', min=0.0, max=1.0
+            )
+        elif p_type == "VECTOR":
+            props[key] = bpy.props.FloatVectorProperty(
+                name=p_name, description=p_desc,
+                default=spec.get("default", (0.0, 0.0, 0.0)),
+                subtype='TRANSLATION'
+            )
+        elif p_type == "OBJECT":
+            props[key] = bpy.props.PointerProperty(
+                name=p_name, description=p_desc, type=bpy.types.Object
+            )
+        elif p_type == "COLLECTION":
+            props[key] = bpy.props.PointerProperty(
+                name=p_name, description=p_desc, type=bpy.types.Collection
+            )
+            
+    return props
 
 def make_dynamic_operator(script_name, mod):
     bl_idname = f"script_runner.dynamic_{script_name.lower()}"
@@ -77,6 +135,7 @@ def make_dynamic_operator(script_name, mod):
             continue
         p_type = spec.get("type")
         p_name = spec.get("name", key)
+        p_desc = spec.get("description", "")
         p_default = spec.get("default")
         
         if p_type == "INT":
@@ -93,7 +152,36 @@ def make_dynamic_operator(script_name, mod):
             prop = bpy.props.BoolProperty(name=p_name, default=p_default)
         elif p_type == "STRING":
             prop = bpy.props.StringProperty(name=p_name, default=p_default)
+        elif p_type == "ENUM":
+            prop = bpy.props.EnumProperty(
+                name=p_name, description=p_desc,
+                items=spec.get("items", []), 
+            )
+        elif p_type == "COLOR":
+            # Determines float array length based on default length (RGB vs RGBA)
+            default_val = spec.get("default", (1.0, 1.0, 1.0, 1.0))
+            prop = bpy.props.FloatVectorProperty(
+                name=p_name, description=p_desc,
+                default=default_val, size=len(default_val),
+                subtype='COLOR', min=0.0, max=1.0
+            )
+        elif p_type == "VECTOR":
+            default_val = spec.get("default", (1.0, 1.0, 1.0, 1.0))
+            prop = bpy.props.FloatVectorProperty(
+                name=p_name, description=p_desc,
+                default=default_val,
+                subtype='TRANSLATION'
+            )
+        elif p_type == "OBJECT":
+            prop = bpy.props.PointerProperty(
+                name=p_name, description=p_desc, type=bpy.types.Object
+            )
+        elif p_type == "COLLECTION":
+            prop = bpy.props.PointerProperty(
+                name=p_name, description=p_desc, type=bpy.types.Collection
+            )
         else:
+            print(f"Unrecognized {p_type=}")
             continue
             
         class_dict['__annotations__'][key] = prop
@@ -174,6 +262,7 @@ class OBJECT_PT_dynamic_script_runner(bpy.types.Panel):
         selected = props.selected_script
         if selected in SCRIPT_REGISTRY:
             op_idname = f"script_runner.dynamic_{selected.lower()}"
+            print(op_idname)
             
             box = layout.box()
             nice_name = selected.replace('_', ' ').title()
