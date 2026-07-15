@@ -40,6 +40,7 @@ dependencies = [
     { name = "geopandas" },
     { name = "h5py" },
     { name = "matplotlib" },
+    { name = "nodebpy" },
     { name = "osm2geojson" },
     { name = "osmnx" },
     { name = "pandas" },
@@ -56,6 +57,7 @@ requires-dist = [
     { name = "geopandas", specifier = ">=1.1.4" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "matplotlib", specifier = ">=3.11.0" },
+    { name = "nodebpy", specifier = ">=520.6.0" },
     { name = "osm2geojson", specifier = ">=0.2.9" },
     { name = "osmnx", specifier = ">=2.0.6" },
     { name = "pandas", specifier = ">=3.0.3" },
@@ -505,6 +507,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
+]
+
+[[package]]
+name = "nodebpy"
+version = "520.6.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5d/f1/f16522f7b2c70650e31bab9caeb7f38c05497c9697dc97d21468ab556018/nodebpy-520.6.0.tar.gz", hash = "sha256:21c76873be75cbaf6438dc66ebd8d3ba43a0c8c547786f5700d1ffbba5dcbe1a", size = 298294, upload-time = "2026-07-15T09:19:13.845Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f9/7e/ab991e7624417c924dd989cafcb71d06e90218a64b05f4455e29ecf59cd7/nodebpy-520.6.0-py3-none-any.whl", hash = "sha256:d738d2974c82acb9a2542c51851ab3bb5815c3aff412d777a965675fb9c3fd8b", size = 339069, upload-time = "2026-07-15T09:19:12.433Z" },
 ]
 
 [[package]]

@@ -17,4 +17,5 @@ dependencies = [
     "unyt>=3.1.0",
     "yt>=4.4.2",
     "tree-clipper>=0.1.8",
+    "nodebpy>=520.6.0",
 ]
