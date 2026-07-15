@@ -16,4 +16,5 @@ dependencies = [
     "rasterio>=1.4.3",
     "unyt>=3.1.0",
     "yt>=4.4.2",
+    "tree-clipper>=0.1.8",
 ]

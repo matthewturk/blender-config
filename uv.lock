@@ -44,6 +44,7 @@ dependencies = [
     { name = "osmnx" },
     { name = "pandas" },
     { name = "rasterio" },
+    { name = "tree-clipper" },
     { name = "unyt" },
     { name = "yt" },
 ]
@@ -59,6 +60,7 @@ requires-dist = [
     { name = "osmnx", specifier = ">=2.0.6" },
     { name = "pandas", specifier = ">=3.0.3" },
     { name = "rasterio", specifier = ">=1.4.3" },
+    { name = "tree-clipper", specifier = ">=0.1.8" },
     { name = "unyt", specifier = ">=3.1.0" },
     { name = "yt", specifier = ">=4.4.2" },
 ]
@@ -922,6 +924,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ae/5f/57ff8b434839e70dab45601284ea413e947a63799891b7553e5960a793a8/tqdm-4.68.4.tar.gz", hash = "sha256:19829c9673638f2a0b8617da4cdcb927e831cd88bcfcb6e78d42a4d1af131520", size = 792418, upload-time = "2026-07-07T09:58:18.369Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/22/2a/5e5e750890ada51017d18d0d4c30da696e5b5bd3180947729927628fc3cb/tqdm-4.68.4-py3-none-any.whl", hash = "sha256:5168118b2368f48c561afda8020fd79195b1bdb0bdf8086b88442c267a315dc2", size = 676612, upload-time = "2026-07-07T09:58:16.256Z" },
+]
+
+[[package]]
+name = "tree-clipper"
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3a/66/cdaed37124c08fbcce91cb52492c608fdca41911abc1e8939a99be52795d/tree_clipper-0.1.8.tar.gz", hash = "sha256:19a777cd4e5a39853949dd6dbf8ca845b38b8c542c2ecec009f9e1586c2e2562", size = 39462, upload-time = "2026-07-10T11:47:48.058Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b8/b7/7161764c8cdd5e54291dc20add12eb4196ca1267ca27911d56930e246d52/tree_clipper-0.1.8-py3-none-any.whl", hash = "sha256:3fd2c8a31f22326bf1fc5a7edbbde3568543c593ac750875f10c36a89f81cf1f", size = 45000, upload-time = "2026-07-10T11:47:46.626Z" },
 ]
 
 [[package]]
