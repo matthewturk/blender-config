@@ -19,11 +19,11 @@ Output:
     sub-grid midpoint.
 """
 
-import bpy
-from nodebpy import geometry as g
 
 
 def build_ppm_tree(name: str = "PPM 1D Interpolation"):
+    import bpy
+    from nodebpy import geometry as g
     existing = bpy.data.node_groups.get(name)
     if existing is not None:
         existing.interface.clear()
@@ -41,7 +41,7 @@ def build_ppm_tree(name: str = "PPM 1D Interpolation"):
         total_count = original_count * n_samples
 
         # ── resample to N× more points ──────────────────────────────────
-        resampled = g.ResampleCurve(geometry, mode="COUNT", count=total_count)
+        resampled = g.ResampleCurve(geometry, mode="Count", count=total_count)
 
         # ── per-point indexing ───────────────────────────────────────────
         global_idx = g.Index()
@@ -84,7 +84,7 @@ def build_ppm_tree(name: str = "PPM 1D Interpolation"):
             >> tree.outputs.geometry("Output")
         )
 
-    return tree
+    return None
 
 
 if __name__ == "__main__":

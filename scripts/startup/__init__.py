@@ -3,6 +3,8 @@ from . import country_wireframes
 from . import get_extension_keys
 from . import flat_gis_importer
 from . import dynamic_script_runner
+from . import ppm1d_nodebpy
+import bpy
 
 # Define the Blender addon/script metadata block
 bl_info = {
@@ -25,6 +27,7 @@ def register():
     get_extension_keys.register()
     flat_gis_importer.register()
     dynamic_script_runner.register()
+    bpy.app.timers.register(ppm1d_nodebpy.build_ppm_tree, first_interval=3.0)
 
 
 def unregister():
