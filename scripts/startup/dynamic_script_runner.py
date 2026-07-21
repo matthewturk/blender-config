@@ -1,7 +1,7 @@
 bl_info = {
-    "name": "Dynamic Script Runner with Hot-Reload",
+    "name": "Dynamic Script & Node Runner with Hot-Reload",
     "author": "Matthew Turk",
-    "version": (1, 3),
+    "version": (1, 5),
     "blender": (4, 2, 0),
     "category": "Development",
 }
@@ -13,12 +13,17 @@ import importlib.util
 
 DYNAMIC_CLASSES = []
 SCRIPT_REGISTRY = {}
+NODE_SCRIPT_REGISTRY = {}
+
+
+# ---------------------------------------------------------------------------
+#  User Scripts (user_scripts/)
+# ---------------------------------------------------------------------------
 
 def load_external_scripts():
     global SCRIPT_REGISTRY
     SCRIPT_REGISTRY.clear()
-    
-    # Target folder: 'user_scripts' folder next to the add-on script
+
     scripts_dir = os.path.join(os.path.dirname(__file__), "user_scripts")
     if not os.path.exists(scripts_dir):
         os.makedirs(scripts_dir)
@@ -29,11 +34,10 @@ def load_external_scripts():
         if f.endswith(".py") and not f.startswith("__"):
             path = os.path.join(scripts_dir, f)
             module_name = f[:-3]
-            
-            # Flush Python's module cache for the target script
+
             if module_name in sys.modules:
                 del sys.modules[module_name]
-            
+
             spec = importlib.util.spec_from_file_location(module_name, path)
             mod = importlib.util.module_from_spec(spec)
             try:
@@ -51,6 +55,49 @@ def get_script_items(self, context):
     return load_external_scripts()
 
 
+# ---------------------------------------------------------------------------
+#  Node Scripts (node_scripts/)
+# ---------------------------------------------------------------------------
+
+def load_node_scripts():
+    global NODE_SCRIPT_REGISTRY
+    NODE_SCRIPT_REGISTRY.clear()
+
+    scripts_dir = os.path.join(os.path.dirname(__file__), "node_scripts")
+    if not os.path.exists(scripts_dir):
+        os.makedirs(scripts_dir)
+        return []
+
+    items = []
+    for f in os.listdir(scripts_dir):
+        if f.endswith(".py") and not f.startswith("__"):
+            path = os.path.join(scripts_dir, f)
+            module_name = f[:-3]
+
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            mod = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(mod)
+                if hasattr(mod, "build"):
+                    NODE_SCRIPT_REGISTRY[module_name] = mod
+                    label = getattr(mod, "NAME", module_name.replace("_", " ").title())
+                    items.append((module_name, label, f"Build {label} node tree"))
+            except Exception as e:
+                print(f"Failed to load node script {f}: {e}")
+    return items
+
+
+def get_node_script_items(self, context):
+    return load_node_scripts()
+
+
+# ---------------------------------------------------------------------------
+#  Settings PropertyGroups
+# ---------------------------------------------------------------------------
+
 class DynamicScriptSettings(bpy.types.PropertyGroup):
     selected_script: bpy.props.EnumProperty(
         name="Select Script",
@@ -58,17 +105,29 @@ class DynamicScriptSettings(bpy.types.PropertyGroup):
         items=get_script_items
     )
 
+class NodeScriptSettings(bpy.types.PropertyGroup):
+    selected_script: bpy.props.EnumProperty(
+        name="Select Node Script",
+        description="Choose a node tree generation script",
+        items=get_node_script_items,
+    )
+
+
+# ---------------------------------------------------------------------------
+#  User-script dynamic props & operators
+# ---------------------------------------------------------------------------
+
 def create_blender_props(params_dict):
     """Maps custom PARAMS configurations to registered bpy.props factories."""
     props = {}
-    
+
     for key, spec in params_dict.items():
         if key == "label":
             continue
         p_type = spec.get("type")
         p_name = spec.get("name", key)
         p_desc = spec.get("description", "")
-        
+
         if p_type == "INT":
             props[key] = bpy.props.IntProperty(
                 name=p_name, description=p_desc,
@@ -90,7 +149,6 @@ def create_blender_props(params_dict):
                 name=p_name, description=p_desc, default=spec.get("default", "")
             )
         elif p_type == "COLOR":
-            # Determines float array length based on default length (RGB vs RGBA)
             default_val = spec.get("default", (1.0, 1.0, 1.0, 1.0))
             props[key] = bpy.props.FloatVectorProperty(
                 name=p_name, description=p_desc,
@@ -113,45 +171,38 @@ def create_blender_props(params_dict):
             )
         elif p_type == "FILE_PATH":
             props[key] = bpy.props.StringProperty(
-                name=p_name, 
-                description=p_desc, 
+                name=p_name,
+                description=p_desc,
                 default=spec.get("default", ""),
-                subtype='FILE_PATH' # Natively spawns a file browser button
+                subtype='FILE_PATH'
             )
         elif p_type == "DIR_PATH":
             props[key] = bpy.props.StringProperty(
-                name=p_name, 
-                description=p_desc, 
+                name=p_name,
+                description=p_desc,
                 default=spec.get("default", ""),
-                subtype='DIR_PATH'  # Natively spawns a folder browser button
+                subtype='DIR_PATH'
             )
-        # Multi-Object generic class target matching
         elif p_type == "POINTER":
             target_str = spec.get("target", "Object")
             target_cls = getattr(bpy.types, target_str, bpy.types.Object)
             props[key] = bpy.props.PointerProperty(
                 name=p_name, description=p_desc, type=target_cls
             )
-            
-        # Integer coordinate vectors (like dimensions or indices arrays)
         elif p_type == "INT_VECTOR":
             default_val = spec.get("default", (0, 0, 0))
             props[key] = bpy.props.IntVectorProperty(
-                name=p_name, description=p_desc, 
+                name=p_name, description=p_desc,
                 default=default_val, size=len(default_val)
             )
-            
-        # Numerical Property Units (Aesthetic formatting mappings)
         elif p_type in {"FLOAT", "INT"} and "unit" in spec:
             prop_factory = bpy.props.FloatProperty if p_type == "FLOAT" else bpy.props.IntProperty
             props[key] = prop_factory(
                 name=p_name, description=p_desc,
                 default=spec.get("default", 0.0 if p_type == "FLOAT" else 0),
-                unit=spec["unit"] # Automatically maps 'LENGTH', 'ROTATION', or 'TIME'
+                unit=spec["unit"]
             )
-        # Enum Multi-Select Handling (Converting the list options)
         elif p_type == "ENUM":
-            # Coerce the user-provided options into a true python set
             raw_options = spec.get("options", set())
             if isinstance(raw_options, (list, tuple)):
                 options_set = set(raw_options)
@@ -161,7 +212,6 @@ def create_blender_props(params_dict):
                 options_set = set()
 
             if "ENUM_FLAG" in options_set:
-                # ENUM_FLAG requires options to be a SET and default to be a SET
                 raw_default = spec.get("default", set())
                 if isinstance(raw_default, (list, tuple)):
                     default_val = set(raw_default)
@@ -178,12 +228,10 @@ def create_blender_props(params_dict):
                     default=default_val
                 )
             else:
-                # Standard dropdown requires default to be a single string or integer
                 default_val = spec.get("default", "")
                 if isinstance(default_val, (set, list, tuple)):
-                    # Fallback safely to the first element if the user accidentally passed an array/set
                     default_val = list(default_val)[0] if default_val else ""
-                
+
                 props[key] = bpy.props.EnumProperty(
                     name=p_name,
                     description=p_desc,
@@ -193,24 +241,22 @@ def create_blender_props(params_dict):
     return props
 
 def make_dynamic_operator(script_name, mod):
-    # Enforce lowercase name matching for structural consistency
     sanitized_name = script_name.lower()
     bl_idname = f"script_runner.dynamic_{sanitized_name}"
     bl_label = f"Run {script_name.replace('_', ' ').title()}"
-    
+
     class_dict = {
         'bl_idname': bl_idname,
         'bl_label': bl_label,
         'bl_options': {'REGISTER', 'UNDO'},
-        '__annotations__': {}  
+        '__annotations__': {}
     }
 
     def execute(self, context):
         runtime_params = {}
-        # Explicit lower-case lookup match
         prop_attr = f"sr_props_{script_name.lower()}"
         props_container = getattr(context.scene, prop_attr, None)
-        
+
         for key, spec in mod.PARAMS.items():
             if key != "label":
                 if props_container and hasattr(props_container, key):
@@ -221,7 +267,7 @@ def make_dynamic_operator(script_name, mod):
                         runtime_params[key] = val
                 else:
                     runtime_params[key] = spec.get("default")
-                    
+
         return mod.execute(context, runtime_params)
 
     def invoke(self, context, event):
@@ -229,14 +275,12 @@ def make_dynamic_operator(script_name, mod):
 
     def draw(self, context):
         layout = self.layout
-        # Explicit lower-case lookup match to prevent API registration misses
         prop_attr = f"sr_props_{script_name.lower()}"
         props_container = getattr(context.scene, prop_attr, None)
-        
+
         if props_container:
             for key in mod.PARAMS.keys():
                 if key != "label":
-                    # Directly draw from the scene properties wrapper
                     layout.prop(props_container, key)
         else:
             layout.label(text="Error loading parameters.", icon='ERROR')
@@ -248,6 +292,57 @@ def make_dynamic_operator(script_name, mod):
     return type(f"SR_OT_dynamic_{script_name}", (bpy.types.Operator,), class_dict)
 
 
+# ---------------------------------------------------------------------------
+#  Node-script build operator
+# ---------------------------------------------------------------------------
+
+class NODE_OT_run_script(bpy.types.Operator):
+    """Build or rebuild the selected node tree"""
+    bl_idname = "node_runner.run_script"
+    bl_label = "Build Node Tree"
+    bl_options = {"REGISTER", "UNDO"}
+
+    script_name: bpy.props.StringProperty()
+
+    def execute(self, context):
+        name = self.script_name
+        if name not in NODE_SCRIPT_REGISTRY:
+            self.report({"ERROR"}, f"Script '{name}' not found")
+            return {"CANCELLED"}
+
+        mod = NODE_SCRIPT_REGISTRY[name]
+        tree_name = getattr(mod, "NAME", name.replace("_", " ").title())
+
+        existing = bpy.data.node_groups.get(tree_name)
+        if existing is not None:
+            existing.interface.clear()
+            existing.nodes.clear()
+
+        try:
+            from nodebpy import geometry as g
+
+            with g.tree(existing or tree_name) as tree:
+                mod.build(tree)
+
+                ng = bpy.data.node_groups[tree_name]
+                if not any(
+                    item.item_type == "SOCKET" and item.in_out == "OUTPUT"
+                    for item in ng.interface.items_tree
+                ):
+                    tree.outputs.geometry("Output")
+
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to build '{tree_name}': {e}")
+            return {"CANCELLED"}
+
+        self.report({"INFO"}, f"Built node tree: {tree_name}")
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+#  Reload operators
+# ---------------------------------------------------------------------------
+
 class SR_OT_reload_scripts(bpy.types.Operator):
     """Scan scripts folder, wipe old operators/property groups, and generate new parameters"""
     bl_idname = "script_runner.reload_scripts"
@@ -256,8 +351,7 @@ class SR_OT_reload_scripts(bpy.types.Operator):
 
     def execute(self, context):
         global DYNAMIC_CLASSES
-        
-        # Unregister all dynamic classes (operators and property groups)
+
         for cls in DYNAMIC_CLASSES:
             try:
                 if issubclass(cls, bpy.types.PropertyGroup):
@@ -268,82 +362,140 @@ class SR_OT_reload_scripts(bpy.types.Operator):
             except Exception:
                 pass
         DYNAMIC_CLASSES.clear()
-        
+
         script_items = load_external_scripts()
         for name, _, _ in script_items:
             mod = SCRIPT_REGISTRY[name]
-            
-            # 1. Force property layout to string-safe lowercase structure
+
             prop_dict = create_blender_props(mod.PARAMS)
             prop_cls_name = f"sr_props_{name.lower()}"
-            
-            # CRITICAL FIX: Modern Blender expects dynamic PropertyGroup properties 
-            # to be injected into '__annotations__', NOT as direct class variables!
+
             class_dict = {
                 '__annotations__': prop_dict
             }
-            
+
             prop_cls = type(prop_cls_name, (bpy.types.PropertyGroup,), class_dict)
             bpy.utils.register_class(prop_cls)
             DYNAMIC_CLASSES.append(prop_cls)
-            
-            # Attach explicitly as a scene-level container pointer 
+
             setattr(bpy.types.Scene, prop_cls_name, bpy.props.PointerProperty(type=prop_cls))
-            
-            # 2. Register execution operator launcher
+
             op_cls = make_dynamic_operator(name, mod)
             bpy.utils.register_class(op_cls)
             DYNAMIC_CLASSES.append(op_cls)
-            
+
         if getattr(context, "area", None) is not None:
             context.area.tag_redraw()
         return {'FINISHED'}
 
 
-class OBJECT_PT_dynamic_script_runner(bpy.types.Panel):
-    bl_label = "Script Automation Library"
-    bl_idname = "OBJECT_PT_dynamic_script_runner"
+class NODE_OT_reload_node_scripts(bpy.types.Operator):
+    """Scan node_scripts folder and refresh the dropdown list"""
+    bl_idname = "node_runner.reload_scripts"
+    bl_label = "Refresh Node Scripts"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        load_node_scripts()
+        if getattr(context, "area", None) is not None:
+            context.area.tag_redraw()
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+#  Script Browser popup
+# ---------------------------------------------------------------------------
+
+class SCRIPT_OT_browser(bpy.types.Operator):
+    """Open the script & node tree browser"""
+    bl_idname = "script_runner.browser"
+    bl_label = "Script Browser"
+    bl_options = {"REGISTER"}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=380)
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        # ── User Scripts section ──────────────────────────────────────
+        box = layout.box()
+        box.label(text="Scripts", icon='TEXT')
+
+        props = scene.dynamic_script_runner
+        row = box.row(align=True)
+        row.prop(props, "selected_script", text="")
+        row.operator("script_runner.reload_scripts", icon='FILE_REFRESH', text="")
+
+        selected = props.selected_script
+        if selected in SCRIPT_REGISTRY:
+            op_idname = f"script_runner.dynamic_{selected.lower()}"
+            box.operator(op_idname, text="Configure & Run", icon='PLAY')
+
+        # ── Node Trees section ───────────────────────────────────────
+        box = layout.box()
+        box.label(text="Node Trees", icon='NODETREE')
+
+        node_props = scene.node_script_runner
+        row = box.row(align=True)
+        row.prop(node_props, "selected_script", text="")
+        row.operator("node_runner.reload_scripts", icon='FILE_REFRESH', text="")
+
+        selected_node = node_props.selected_script
+        if selected_node in NODE_SCRIPT_REGISTRY:
+            box.operator(
+                "node_runner.run_script",
+                text="Build Node Tree",
+                icon='PLAY',
+            ).script_name = selected_node
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+
+class OBJECT_PT_script_browser_button(bpy.types.Panel):
+    """One-line sidebar entry point for the script browser popup"""
+    bl_label = "Scripts"
+    bl_idname = "OBJECT_PT_script_browser_button"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'Script Runner'
 
     def draw(self, context):
-        layout = self.layout
-        scene = context.scene
-        props = scene.dynamic_script_runner
-        
-        # Header selection dropdown array
-        row = layout.row(align=True)
-        row.prop(props, "selected_script", text="")
-        row.operator("script_runner.reload_scripts", icon='FILE_REFRESH', text="")
-        
-        layout.separator()
-        
-        selected = props.selected_script
-        if selected in SCRIPT_REGISTRY:
-            op_idname = f"script_runner.dynamic_{selected.lower()}"
-            
-            box = layout.box()
-            nice_name = selected.replace('_', ' ').title()
-            box.label(text=f"Ready: {nice_name}", icon='TEXT')
-            
-            # The panel ONLY draws the execution button launcher.
-            # Clicking it calls `invoke()`, opening the pop-up options window natively.
-            box.operator(op_idname, text="Configure & Run", icon='PLAY')
+        self.layout.operator("script_runner.browser", icon='WINDOW', text="Open Script Browser")
 
-def _reload_scripts():
+
+# ---------------------------------------------------------------------------
+#  Startup timer
+# ---------------------------------------------------------------------------
+
+def _reload_all():
     if hasattr(bpy.ops, "script_runner") and hasattr(bpy.ops.script_runner, "reload_scripts"):
         print("Reloading scripts on startup.")
         bpy.ops.script_runner.reload_scripts()
+    if hasattr(bpy.ops, "node_runner") and hasattr(bpy.ops.node_runner, "reload_scripts"):
+        print("Reloading node scripts on startup.")
+        bpy.ops.node_runner.reload_scripts()
     return None
+
+
+# ---------------------------------------------------------------------------
+#  Register / Unregister
+# ---------------------------------------------------------------------------
 
 def register():
     bpy.utils.register_class(DynamicScriptSettings)
+    bpy.utils.register_class(NodeScriptSettings)
     bpy.utils.register_class(SR_OT_reload_scripts)
-    bpy.utils.register_class(OBJECT_PT_dynamic_script_runner)
-    
+    bpy.utils.register_class(NODE_OT_reload_node_scripts)
+    bpy.utils.register_class(NODE_OT_run_script)
+    bpy.utils.register_class(SCRIPT_OT_browser)
+    bpy.utils.register_class(OBJECT_PT_script_browser_button)
+
     bpy.types.Scene.dynamic_script_runner = bpy.props.PointerProperty(type=DynamicScriptSettings)
-    bpy.app.timers.register(_reload_scripts, first_interval=1.0)
+    bpy.types.Scene.node_script_runner = bpy.props.PointerProperty(type=NodeScriptSettings)
+    bpy.app.timers.register(_reload_all, first_interval=1.0)
 
 def unregister():
     global DYNAMIC_CLASSES
@@ -357,11 +509,16 @@ def unregister():
         except Exception:
             pass
     DYNAMIC_CLASSES.clear()
-    
-    bpy.utils.unregister_class(OBJECT_PT_dynamic_script_runner)
+
+    bpy.utils.unregister_class(OBJECT_PT_script_browser_button)
+    bpy.utils.unregister_class(SCRIPT_OT_browser)
+    bpy.utils.unregister_class(NODE_OT_run_script)
+    bpy.utils.unregister_class(NODE_OT_reload_node_scripts)
     bpy.utils.unregister_class(SR_OT_reload_scripts)
+    bpy.utils.unregister_class(NodeScriptSettings)
     bpy.utils.unregister_class(DynamicScriptSettings)
     del bpy.types.Scene.dynamic_script_runner
+    del bpy.types.Scene.node_script_runner
 
 if __name__ == "__main__":
     register()
