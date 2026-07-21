@@ -154,6 +154,7 @@ def register_prop_group(prefix, name, mod):
     bpy.utils.register_class(prop_cls)
     DYNAMIC_CLASSES.append(prop_cls)
     setattr(bpy.types.Scene, prop_cls_name, bpy.props.PointerProperty(type=prop_cls))
+    #print(f"[node_runner] registered {prop_cls_name} on Scene")
     return prop_cls_name
 
 
@@ -184,6 +185,7 @@ def draw_params_from_context(layout, context, prefix, name, mod):
         return
     prop_attr = f"{prefix}_{name.lower()}"
     props_container = getattr(context.scene, prop_attr, None)
+    #print(f"[node_runner] draw: looking for {prop_attr} on scene -> {props_container}")
     if props_container:
         for key in mod.PARAMS.keys():
             if key != "label":
@@ -358,7 +360,9 @@ class NODE_OT_run_script(bpy.types.Operator):
         mod = NODE_SCRIPT_REGISTRY[name]
         params = collect_params_from_context(context, "nsr_props", name, mod)
 
-        tree_name = getattr(mod, "NAME", name.replace("_", " ").title())
+        tree_name = params.pop("node_group_name", None)
+        if not tree_name:
+            tree_name = getattr(mod, "NAME", name.replace("_", " ").title())
 
         existing = bpy.data.node_groups.get(tree_name)
         if existing is not None:
@@ -445,9 +449,12 @@ class NODE_OT_reload_node_scripts(bpy.types.Operator):
                 pass
 
         script_items = load_node_scripts()
+        #print(f"[node_runner] reload: found {len(script_items)} node scripts: {[n for n,_,_ in script_items]}")
         for name, _, _ in script_items:
             mod = NODE_SCRIPT_REGISTRY[name]
-            if hasattr(mod, "PARAMS") and mod.PARAMS:
+            has_params = hasattr(mod, "PARAMS") and bool(mod.PARAMS)
+            #print(f"[node_runner]   {name}: PARAMS={has_params}")
+            if has_params:
                 register_prop_group("nsr_props", name, mod)
 
         if getattr(context, "area", None) is not None:

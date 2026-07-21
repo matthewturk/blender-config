@@ -78,5 +78,5 @@ def build(tree, params):
     points.remove(points[0])
     mapping.update()
 
-    tree.links.new(geometry, float_curve.inputs[0])
-    tree.links.new(float_curve.outputs[0], tree.outputs.geometry("Output"))
+    tree.link(geometry, float_curve.inputs[0])
+    tree.link(float_curve.outputs[0], tree.outputs.geometry("Output"))
