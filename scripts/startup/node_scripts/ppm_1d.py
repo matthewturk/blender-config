@@ -1,7 +1,7 @@
 NAME = "PPM 1D Interpolation"
 
 
-def build(tree):
+def build(tree, params):
     from nodebpy import geometry as g
 
     geometry = tree.inputs.geometry("Curve")

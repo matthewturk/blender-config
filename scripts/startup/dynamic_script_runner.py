@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Dynamic Script & Node Runner with Hot-Reload",
     "author": "Matthew Turk",
-    "version": (1, 5),
+    "version": (1, 6),
     "blender": (4, 2, 0),
     "category": "Development",
 }
@@ -17,104 +17,7 @@ NODE_SCRIPT_REGISTRY = {}
 
 
 # ---------------------------------------------------------------------------
-#  User Scripts (user_scripts/)
-# ---------------------------------------------------------------------------
-
-def load_external_scripts():
-    global SCRIPT_REGISTRY
-    SCRIPT_REGISTRY.clear()
-
-    scripts_dir = os.path.join(os.path.dirname(__file__), "user_scripts")
-    if not os.path.exists(scripts_dir):
-        os.makedirs(scripts_dir)
-        return []
-
-    items = []
-    for f in os.listdir(scripts_dir):
-        if f.endswith(".py") and not f.startswith("__"):
-            path = os.path.join(scripts_dir, f)
-            module_name = f[:-3]
-
-            if module_name in sys.modules:
-                del sys.modules[module_name]
-
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            mod = importlib.util.module_from_spec(spec)
-            try:
-                spec.loader.exec_module(mod)
-                if hasattr(mod, "PARAMS") and hasattr(mod, "execute"):
-                    SCRIPT_REGISTRY[module_name] = mod
-                    label = mod.PARAMS.get("label", module_name.replace('_', ' ').title())
-                    items.append((module_name, label, f"Run {f}"))
-            except Exception as e:
-                print(f"Failed to load script {f}: {e}")
-    return items
-
-
-def get_script_items(self, context):
-    return load_external_scripts()
-
-
-# ---------------------------------------------------------------------------
-#  Node Scripts (node_scripts/)
-# ---------------------------------------------------------------------------
-
-def load_node_scripts():
-    global NODE_SCRIPT_REGISTRY
-    NODE_SCRIPT_REGISTRY.clear()
-
-    scripts_dir = os.path.join(os.path.dirname(__file__), "node_scripts")
-    if not os.path.exists(scripts_dir):
-        os.makedirs(scripts_dir)
-        return []
-
-    items = []
-    for f in os.listdir(scripts_dir):
-        if f.endswith(".py") and not f.startswith("__"):
-            path = os.path.join(scripts_dir, f)
-            module_name = f[:-3]
-
-            if module_name in sys.modules:
-                del sys.modules[module_name]
-
-            spec = importlib.util.spec_from_file_location(module_name, path)
-            mod = importlib.util.module_from_spec(spec)
-            try:
-                spec.loader.exec_module(mod)
-                if hasattr(mod, "build"):
-                    NODE_SCRIPT_REGISTRY[module_name] = mod
-                    label = getattr(mod, "NAME", module_name.replace("_", " ").title())
-                    items.append((module_name, label, f"Build {label} node tree"))
-            except Exception as e:
-                print(f"Failed to load node script {f}: {e}")
-    return items
-
-
-def get_node_script_items(self, context):
-    return load_node_scripts()
-
-
-# ---------------------------------------------------------------------------
-#  Settings PropertyGroups
-# ---------------------------------------------------------------------------
-
-class DynamicScriptSettings(bpy.types.PropertyGroup):
-    selected_script: bpy.props.EnumProperty(
-        name="Select Script",
-        description="Choose a script from your automation folder",
-        items=get_script_items
-    )
-
-class NodeScriptSettings(bpy.types.PropertyGroup):
-    selected_script: bpy.props.EnumProperty(
-        name="Select Node Script",
-        description="Choose a node tree generation script",
-        items=get_node_script_items,
-    )
-
-
-# ---------------------------------------------------------------------------
-#  User-script dynamic props & operators
+#  Shared parameter helpers
 # ---------------------------------------------------------------------------
 
 def create_blender_props(params_dict):
@@ -240,6 +143,156 @@ def create_blender_props(params_dict):
                 )
     return props
 
+
+def register_prop_group(prefix, name, mod):
+    """Create a PropertyGroup from mod.PARAMS and register it on Scene."""
+    prop_dict = create_blender_props(mod.PARAMS)
+    prop_cls_name = f"{prefix}_{name.lower()}"
+    prop_cls = type(prop_cls_name, (bpy.types.PropertyGroup,), {
+        '__annotations__': prop_dict
+    })
+    bpy.utils.register_class(prop_cls)
+    DYNAMIC_CLASSES.append(prop_cls)
+    setattr(bpy.types.Scene, prop_cls_name, bpy.props.PointerProperty(type=prop_cls))
+    return prop_cls_name
+
+
+def collect_params_from_context(context, prefix, name, mod):
+    """Read current values from the scene PropertyGroup for this script."""
+    params = {}
+    if not hasattr(mod, "PARAMS"):
+        return params
+    prop_attr = f"{prefix}_{name.lower()}"
+    props_container = getattr(context.scene, prop_attr, None)
+    for key, spec in mod.PARAMS.items():
+        if key == "label":
+            continue
+        if props_container and hasattr(props_container, key):
+            val = getattr(props_container, key)
+            if spec["type"] in {"COLOR", "VECTOR"}:
+                params[key] = tuple(val)
+            else:
+                params[key] = val
+        else:
+            params[key] = spec.get("default")
+    return params
+
+
+def draw_params_from_context(layout, context, prefix, name, mod):
+    """Draw PARAMS properties from the scene PropertyGroup into a layout."""
+    if not hasattr(mod, "PARAMS") or not mod.PARAMS:
+        return
+    prop_attr = f"{prefix}_{name.lower()}"
+    props_container = getattr(context.scene, prop_attr, None)
+    if props_container:
+        for key in mod.PARAMS.keys():
+            if key != "label":
+                layout.prop(props_container, key)
+    else:
+        layout.label(text="Error loading parameters.", icon='ERROR')
+
+
+# ---------------------------------------------------------------------------
+#  User Scripts (user_scripts/)
+# ---------------------------------------------------------------------------
+
+def load_external_scripts():
+    global SCRIPT_REGISTRY
+    SCRIPT_REGISTRY.clear()
+
+    scripts_dir = os.path.join(os.path.dirname(__file__), "user_scripts")
+    if not os.path.exists(scripts_dir):
+        os.makedirs(scripts_dir)
+        return []
+
+    items = []
+    for f in os.listdir(scripts_dir):
+        if f.endswith(".py") and not f.startswith("__"):
+            path = os.path.join(scripts_dir, f)
+            module_name = f[:-3]
+
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            mod = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(mod)
+                if hasattr(mod, "PARAMS") and hasattr(mod, "execute"):
+                    SCRIPT_REGISTRY[module_name] = mod
+                    label = mod.PARAMS.get("label", module_name.replace('_', ' ').title())
+                    items.append((module_name, label, f"Run {f}"))
+            except Exception as e:
+                print(f"Failed to load script {f}: {e}")
+    return items
+
+
+def get_script_items(self, context):
+    return load_external_scripts()
+
+
+# ---------------------------------------------------------------------------
+#  Node Scripts (node_scripts/)
+# ---------------------------------------------------------------------------
+
+def load_node_scripts():
+    global NODE_SCRIPT_REGISTRY
+    NODE_SCRIPT_REGISTRY.clear()
+
+    scripts_dir = os.path.join(os.path.dirname(__file__), "node_scripts")
+    if not os.path.exists(scripts_dir):
+        os.makedirs(scripts_dir)
+        return []
+
+    items = []
+    for f in os.listdir(scripts_dir):
+        if f.endswith(".py") and not f.startswith("__"):
+            path = os.path.join(scripts_dir, f)
+            module_name = f[:-3]
+
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            mod = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(mod)
+                if hasattr(mod, "build"):
+                    NODE_SCRIPT_REGISTRY[module_name] = mod
+                    label = getattr(mod, "NAME", module_name.replace("_", " ").title())
+                    items.append((module_name, label, f"Build {label} node tree"))
+            except Exception as e:
+                print(f"Failed to load node script {f}: {e}")
+    return items
+
+
+def get_node_script_items(self, context):
+    return load_node_scripts()
+
+
+# ---------------------------------------------------------------------------
+#  Settings PropertyGroups
+# ---------------------------------------------------------------------------
+
+class DynamicScriptSettings(bpy.types.PropertyGroup):
+    selected_script: bpy.props.EnumProperty(
+        name="Select Script",
+        description="Choose a script from your automation folder",
+        items=get_script_items
+    )
+
+class NodeScriptSettings(bpy.types.PropertyGroup):
+    selected_script: bpy.props.EnumProperty(
+        name="Select Node Script",
+        description="Choose a node tree generation script",
+        items=get_node_script_items,
+    )
+
+
+# ---------------------------------------------------------------------------
+#  User-script dynamic operators
+# ---------------------------------------------------------------------------
+
 def make_dynamic_operator(script_name, mod):
     sanitized_name = script_name.lower()
     bl_idname = f"script_runner.dynamic_{sanitized_name}"
@@ -253,37 +306,16 @@ def make_dynamic_operator(script_name, mod):
     }
 
     def execute(self, context):
-        runtime_params = {}
-        prop_attr = f"sr_props_{script_name.lower()}"
-        props_container = getattr(context.scene, prop_attr, None)
-
-        for key, spec in mod.PARAMS.items():
-            if key != "label":
-                if props_container and hasattr(props_container, key):
-                    val = getattr(props_container, key)
-                    if spec["type"] in {"COLOR", "VECTOR"}:
-                        runtime_params[key] = tuple(val)
-                    else:
-                        runtime_params[key] = val
-                else:
-                    runtime_params[key] = spec.get("default")
-
+        runtime_params = collect_params_from_context(
+            context, "sr_props", script_name, mod
+        )
         return mod.execute(context, runtime_params)
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):
-        layout = self.layout
-        prop_attr = f"sr_props_{script_name.lower()}"
-        props_container = getattr(context.scene, prop_attr, None)
-
-        if props_container:
-            for key in mod.PARAMS.keys():
-                if key != "label":
-                    layout.prop(props_container, key)
-        else:
-            layout.label(text="Error loading parameters.", icon='ERROR')
+        draw_params_from_context(self.layout, context, "sr_props", script_name, mod)
 
     class_dict['execute'] = execute
     class_dict['invoke'] = invoke
@@ -304,6 +336,19 @@ class NODE_OT_run_script(bpy.types.Operator):
 
     script_name: bpy.props.StringProperty()
 
+    def invoke(self, context, event):
+        mod = NODE_SCRIPT_REGISTRY.get(self.script_name)
+        if mod and hasattr(mod, "PARAMS") and mod.PARAMS:
+            return context.window_manager.invoke_props_dialog(self)
+        return self.execute(context, event)
+
+    def draw(self, context):
+        mod = NODE_SCRIPT_REGISTRY.get(self.script_name)
+        if mod:
+            draw_params_from_context(
+                self.layout, context, "nsr_props", self.script_name, mod
+            )
+
     def execute(self, context):
         name = self.script_name
         if name not in NODE_SCRIPT_REGISTRY:
@@ -311,6 +356,8 @@ class NODE_OT_run_script(bpy.types.Operator):
             return {"CANCELLED"}
 
         mod = NODE_SCRIPT_REGISTRY[name]
+        params = collect_params_from_context(context, "nsr_props", name, mod)
+
         tree_name = getattr(mod, "NAME", name.replace("_", " ").title())
 
         existing = bpy.data.node_groups.get(tree_name)
@@ -322,7 +369,7 @@ class NODE_OT_run_script(bpy.types.Operator):
             from nodebpy import geometry as g
 
             with g.tree(existing or tree_name) as tree:
-                mod.build(tree)
+                mod.build(tree, params)
 
                 ng = bpy.data.node_groups[tree_name]
                 if not any(
@@ -366,19 +413,7 @@ class SR_OT_reload_scripts(bpy.types.Operator):
         script_items = load_external_scripts()
         for name, _, _ in script_items:
             mod = SCRIPT_REGISTRY[name]
-
-            prop_dict = create_blender_props(mod.PARAMS)
-            prop_cls_name = f"sr_props_{name.lower()}"
-
-            class_dict = {
-                '__annotations__': prop_dict
-            }
-
-            prop_cls = type(prop_cls_name, (bpy.types.PropertyGroup,), class_dict)
-            bpy.utils.register_class(prop_cls)
-            DYNAMIC_CLASSES.append(prop_cls)
-
-            setattr(bpy.types.Scene, prop_cls_name, bpy.props.PointerProperty(type=prop_cls))
+            register_prop_group("sr_props", name, mod)
 
             op_cls = make_dynamic_operator(name, mod)
             bpy.utils.register_class(op_cls)
@@ -396,7 +431,25 @@ class NODE_OT_reload_node_scripts(bpy.types.Operator):
     bl_options = {"INTERNAL"}
 
     def execute(self, context):
-        load_node_scripts()
+        global DYNAMIC_CLASSES
+
+        for cls in list(DYNAMIC_CLASSES):
+            try:
+                if issubclass(cls, bpy.types.PropertyGroup) and cls.__name__.startswith("nsr_props_"):
+                    prop_name = cls.__name__
+                    if hasattr(bpy.types.Scene, prop_name):
+                        delattr(bpy.types.Scene, prop_name)
+                    bpy.utils.unregister_class(cls)
+                    DYNAMIC_CLASSES.remove(cls)
+            except Exception:
+                pass
+
+        script_items = load_node_scripts()
+        for name, _, _ in script_items:
+            mod = NODE_SCRIPT_REGISTRY[name]
+            if hasattr(mod, "PARAMS") and mod.PARAMS:
+                register_prop_group("nsr_props", name, mod)
+
         if getattr(context, "area", None) is not None:
             context.area.tag_redraw()
         return {"FINISHED"}
