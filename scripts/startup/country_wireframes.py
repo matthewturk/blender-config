@@ -1327,14 +1327,26 @@ def _create_geojson_point_object(
     return obj
 
 
-def _import_geojson_feature_payload(context, settings, payload, source_label):
+def _import_geojson_feature_payload(
+    context,
+    settings,
+    payload,
+    source_label,
+    clear_existing=None,
+    existing_data_mode=None,
+):
     root = _get_or_create_collection(context.scene.collection, "Geo Wireframes")
     imports_coll = _get_child_collection(root, "GeoJSON Imports")
     if imports_coll is None:
         imports_coll = _get_or_create_collection(root, "GeoJSON Imports")
 
-    if settings.clear_existing:
-        if settings.geojson_existing_data_mode == "DELETE":
+    if clear_existing is None:
+        clear_existing = settings.clear_existing
+    if existing_data_mode is None:
+        existing_data_mode = settings.geojson_existing_data_mode
+
+    if clear_existing:
+        if existing_data_mode == "DELETE":
             _clear_collection_recursive(imports_coll)
         else:
             if imports_coll.objects or imports_coll.children:
@@ -2594,6 +2606,25 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
         ),
         default="ARCHIVE",
     )
+    geojson_clear_existing: bpy.props.BoolProperty(
+        name="Clear Existing",
+        description="Remove previously imported GeoJSON data first",
+        default=True,
+    )
+    osm_clear_existing: bpy.props.BoolProperty(
+        name="Clear Existing",
+        description="Remove previously imported OSM data first",
+        default=True,
+    )
+    osm_existing_data_mode: bpy.props.EnumProperty(
+        name="When Clearing",
+        description="How to handle existing OSM imports when Clear Existing is on",
+        items=(
+            ("ARCHIVE", "Archive", "Move current imports into GeoJSON Archive"),
+            ("DELETE", "Delete", "Delete existing imports recursively"),
+        ),
+        default="ARCHIVE",
+    )
     osm_query_mode: bpy.props.EnumProperty(
         name="OSM Query",
         description=(
@@ -2784,6 +2815,8 @@ class OBJECT_OT_import_geojson_wireframes(bpy.types.Operator, ImportHelper):
             settings,
             payload,
             self.filepath,
+            clear_existing=settings.geojson_clear_existing,
+            existing_data_mode=settings.geojson_existing_data_mode,
         )
 
         if lines_created == 0 and points_created == 0:
@@ -2888,6 +2921,8 @@ class OBJECT_OT_import_osm_overpass(bpy.types.Operator):
             settings,
             payload,
             source_label,
+            clear_existing=settings.osm_clear_existing,
+            existing_data_mode=settings.osm_existing_data_mode,
         )
 
         self.report(
@@ -3355,18 +3390,28 @@ class VIEW3D_PT_country_wireframes(bpy.types.Panel):
     bl_category = "Create"
 
     def draw(self, context):
+        pass
+
+
+class VIEW3D_PT_country_wireframes_build(bpy.types.Panel):
+    bl_label = "Country Wireframes"
+    bl_idname = "VIEW3D_PT_country_wireframes_build"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Create"
+    bl_parent_id = "VIEW3D_PT_country_wireframes"
+
+    def draw(self, context):
         layout = self.layout
         settings = context.scene.country_wireframe_settings
 
-        build_box = layout.box()
-        build_box.label(text="Build Sets")
-        row = build_box.row(align=True)
+        row = layout.row(align=True)
         row.prop(settings, "countries_enabled", toggle=True)
         row.prop(settings, "continents_enabled", toggle=True)
 
-        build_box.prop(settings, "generation_mode")
+        layout.prop(settings, "generation_mode")
 
-        row = build_box.row()
+        row = layout.row()
         row.template_list(
             "VIEW3D_UL_geo_country_list",
             "",
@@ -3385,89 +3430,135 @@ class VIEW3D_PT_country_wireframes(bpy.types.Panel):
             icon="CHECKBOX_DEHLT",
         )
 
-        build_box.prop(settings, "continents")
-        build_box.prop(settings, "clear_existing")
-        build_box.prop(settings, "globe_radius")
-        build_box.prop(settings, "create_reference_globe")
-        build_box.prop(settings, "overlay_offset")
-        coord_box = build_box.box()
+        layout.prop(settings, "continents")
+        layout.prop(settings, "clear_existing")
+        layout.prop(settings, "globe_radius")
+        layout.prop(settings, "create_reference_globe")
+        layout.prop(settings, "overlay_offset")
+        coord_box = layout.box()
         coord_box.label(text="Coordinate Space")
         coord_box.prop(settings, "use_latlon_coordinates")
         if settings.use_latlon_coordinates:
             coord_box.prop(settings, "latlon_coordinate_scale")
             coord_box.prop(settings, "latlon_fit_to_bbox")
-        build_box.prop(settings, "resolution")
-        build_box.prop(settings, "marker_scale")
-        build_box.prop(settings, "continent_scale")
-        build_box.prop(settings, "add_surface_mesh")
-        build_box.operator(
+        layout.prop(settings, "resolution")
+        layout.prop(settings, "marker_scale")
+        layout.prop(settings, "continent_scale")
+        layout.prop(settings, "add_surface_mesh")
+        layout.operator(
             "object.create_country_wireframes",
             icon="MESH_UVSPHERE",
         )
 
-        geojson_box = layout.box()
-        geojson_box.label(text="GeoJSON Import")
-        geojson_box.prop(settings, "geojson_output_mode")
+
+class VIEW3D_PT_country_wireframes_geojson(bpy.types.Panel):
+    bl_label = "GeoJSON Import"
+    bl_idname = "VIEW3D_PT_country_wireframes_geojson"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Create"
+    bl_parent_id = "VIEW3D_PT_country_wireframes"
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.country_wireframe_settings
+
+        layout.prop(settings, "geojson_clear_existing")
+        if settings.geojson_clear_existing:
+            layout.prop(settings, "geojson_existing_data_mode")
+        layout.prop(settings, "geojson_output_mode")
         if settings.geojson_output_mode == "CURVE":
-            geojson_box.prop(settings, "geojson_curve_spline_type")
-        geojson_box.prop(settings, "geojson_point_mode")
+            layout.prop(settings, "geojson_curve_spline_type")
+        layout.prop(settings, "geojson_point_mode")
         if settings.geojson_point_mode == "SPHERE":
-            geojson_box.prop(settings, "geojson_point_scale")
-            geojson_box.prop(settings, "geojson_point_resolution")
-        geojson_box.prop(settings, "geojson_curve_step_deg")
-        geojson_box.prop(settings, "geojson_simplify_tolerance_deg")
-        geojson_box.prop(settings, "geojson_spherical_tolerance_deg")
-        geojson_box.prop(settings, "geojson_split_collections")
-        if settings.clear_existing:
-            geojson_box.prop(settings, "geojson_existing_data_mode")
-        geojson_box.operator(
+            layout.prop(settings, "geojson_point_scale")
+            layout.prop(settings, "geojson_point_resolution")
+        layout.prop(settings, "geojson_curve_step_deg")
+        layout.prop(settings, "geojson_simplify_tolerance_deg")
+        layout.prop(settings, "geojson_spherical_tolerance_deg")
+        layout.prop(settings, "geojson_split_collections")
+        layout.operator(
             "object.import_geojson_wireframes",
             icon="IMPORT",
         )
 
-        osm_box = layout.box()
-        osm_box.label(text="OSM Import")
-        row = osm_box.row(align=True)
+
+class VIEW3D_PT_country_wireframes_osm(bpy.types.Panel):
+    bl_label = "OSM Import"
+    bl_idname = "VIEW3D_PT_country_wireframes_osm"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Create"
+    bl_parent_id = "VIEW3D_PT_country_wireframes"
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.country_wireframe_settings
+
+        row = layout.row(align=True)
         row.prop(settings, "osm_preset")
         row.operator("object.apply_osm_preset", text="Apply", icon="PRESET")
-        osm_box.prop(settings, "osm_query_mode")
-        osm_box.prop(settings, "osm_timeout_seconds")
-        osm_box.prop(settings, "osm_require_confirmation")
-        osm_box.prop(settings, "osm_bbox")
-        osm_box.prop(settings, "osm_warn_bbox_area_deg2")
-        osm_box.prop(settings, "osm_hard_bbox_area_deg2")
-        osm_box.prop(settings, "osm_tag_filters")
-        osm_box.prop(settings, "osm_max_features")
-        osm_box.prop(settings, "osm_simplify_tolerance_deg")
-        osm_box.prop(settings, "osm_max_response_mb")
+        layout.prop(settings, "osm_query_mode")
+        layout.prop(settings, "osm_timeout_seconds")
+        layout.prop(settings, "osm_require_confirmation")
+        layout.prop(settings, "osm_bbox")
+        layout.prop(settings, "osm_warn_bbox_area_deg2")
+        layout.prop(settings, "osm_hard_bbox_area_deg2")
+        layout.prop(settings, "osm_tag_filters")
+        layout.prop(settings, "osm_max_features")
+        layout.prop(settings, "osm_simplify_tolerance_deg")
+        layout.prop(settings, "osm_max_response_mb")
+        layout.prop(settings, "osm_clear_existing")
+        if settings.osm_clear_existing:
+            layout.prop(settings, "osm_existing_data_mode")
         if settings.osm_query_mode == "CUSTOM":
-            osm_box.prop(settings, "osm_endpoint")
-            osm_box.prop(settings, "osm_custom_query")
-        osm_box.operator(
+            layout.prop(settings, "osm_endpoint")
+            layout.prop(settings, "osm_custom_query")
+        layout.operator(
             "object.import_osm_overpass",
             icon="URL",
         )
 
-        imagery_box = layout.box()
-        imagery_box.label(text="Imagery")
-        imagery_box.prop(settings, "imagery_blue_marble_url")
-        imagery_box.prop(settings, "imagery_max_size")
-        imagery_box.prop(settings, "imagery_require_confirmation")
-        imagery_box.prop(settings, "imagery_max_download_mb")
-        imagery_box.prop(settings, "imagery_max_local_file_mb")
-        imagery_box.prop(settings, "imagery_max_source_pixels")
-        imagery_box.operator(
+
+class VIEW3D_PT_country_wireframes_imagery(bpy.types.Panel):
+    bl_label = "Imagery"
+    bl_idname = "VIEW3D_PT_country_wireframes_imagery"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Create"
+    bl_parent_id = "VIEW3D_PT_country_wireframes"
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.country_wireframe_settings
+
+        layout.prop(settings, "imagery_blue_marble_url")
+        layout.prop(settings, "imagery_max_size")
+        layout.prop(settings, "imagery_require_confirmation")
+        layout.prop(settings, "imagery_max_download_mb")
+        layout.prop(settings, "imagery_max_local_file_mb")
+        layout.prop(settings, "imagery_max_source_pixels")
+        layout.operator(
             "object.apply_blue_marble_texture",
             icon="IMAGE_DATA",
         )
-        imagery_box.operator(
+        layout.operator(
             "object.apply_texture_from_raster",
             icon="FILE_IMAGE",
         )
 
-        utility_box = layout.box()
-        utility_box.label(text="Utilities")
-        utility_box.operator(
+
+class VIEW3D_PT_country_wireframes_utilities(bpy.types.Panel):
+    bl_label = "Utilities"
+    bl_idname = "VIEW3D_PT_country_wireframes_utilities"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "Create"
+    bl_parent_id = "VIEW3D_PT_country_wireframes"
+
+    def draw(self, context):
+        layout = self.layout
+        layout.operator(
             "object.build_geo_nodes_source",
             icon="NODETREE",
         )
@@ -3488,6 +3579,11 @@ CLASSES = (
     OBJECT_OT_create_country_wireframes,
     OBJECT_OT_build_geo_nodes_source,
     VIEW3D_PT_country_wireframes,
+    VIEW3D_PT_country_wireframes_build,
+    VIEW3D_PT_country_wireframes_geojson,
+    VIEW3D_PT_country_wireframes_osm,
+    VIEW3D_PT_country_wireframes_imagery,
+    VIEW3D_PT_country_wireframes_utilities,
 )
 
 
