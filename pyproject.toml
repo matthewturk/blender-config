@@ -8,6 +8,7 @@ dependencies = [
     "databpy>=0.7.0",
     "geonamescache>=3.0.1",
     "geopandas>=1.1.4",
+    "gpx>=2026.1.0",
     "h5py>=3.16.0",
     "matplotlib>=3.11.0",
     "osmnx>=2.0.6",

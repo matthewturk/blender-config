@@ -38,6 +38,7 @@ dependencies = [
     { name = "databpy" },
     { name = "geonamescache" },
     { name = "geopandas" },
+    { name = "gpx" },
     { name = "h5py" },
     { name = "matplotlib" },
     { name = "nodebpy" },
@@ -55,6 +56,7 @@ requires-dist = [
     { name = "databpy", specifier = ">=0.7.0" },
     { name = "geonamescache", specifier = ">=3.0.1" },
     { name = "geopandas", specifier = ">=1.1.4" },
+    { name = "gpx", specifier = ">=2026.1.0" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "matplotlib", specifier = ">=3.11.0" },
     { name = "nodebpy", specifier = ">=520.6.0" },
@@ -322,6 +324,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/39/a9/0478b74a33aea66827c10baaf6025cb2a17e44b1c117533eecd3e977bb75/geopandas-1.1.4.tar.gz", hash = "sha256:06f2890a07e1a239047daa14b486a7c6ae5ce82dcf7405e13c46bf31f5d0dd66", size = 337445, upload-time = "2026-06-26T17:23:54.497Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/59/a8/bd530cc264e62ddbc1d1bb7225823992e6f2432c664693e9281bb6b9c359/geopandas-1.1.4-py3-none-any.whl", hash = "sha256:1a0c459cbdb1537cd154dafe6174be20d1760844b7f1c967dc8520b180f2e773", size = 343292, upload-time = "2026-06-26T17:23:53.112Z" },
+]
+
+[[package]]
+name = "gpx"
+version = "2026.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/70/39be5bc00dc56473b37c53ec380921e9049981cb702559781e60cdf3e23c/gpx-2026.3.0.tar.gz", hash = "sha256:f27d5d3029a80a8ac9cb353a0dd007b1c2fe12a30138e3ccec0612fef7ba7d20", size = 64091, upload-time = "2026-05-17T08:49:20.157Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0a/1e/1ef9906980ec869a47f32f64cdd2c3015a02926cfe3f81d228cc2fb44b57/gpx-2026.3.0-py3-none-any.whl", hash = "sha256:b289c0688e872252c74a47cf0ea83610033eddaa55a8924261239d983dfe64cf", size = 59366, upload-time = "2026-05-17T08:49:19.13Z" },
 ]
 
 [[package]]

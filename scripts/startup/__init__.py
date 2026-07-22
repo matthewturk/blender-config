@@ -1,8 +1,10 @@
 from . import chezmoi_sync
+from . import geo_coord
 from . import country_wireframes
 from . import get_extension_keys
 from . import flat_gis_importer
 from . import dynamic_script_runner
+from . import gpx_import
 from . import ppm1d_nodebpy
 import bpy
 
@@ -23,20 +25,24 @@ bl_info = {
 def register():
     # Pass registration downstream to your sync logic
     chezmoi_sync.register()
+    geo_coord.register()
     country_wireframes.register()
     get_extension_keys.register()
     flat_gis_importer.register()
     dynamic_script_runner.register()
+    gpx_import.register()
     bpy.app.timers.register(ppm1d_nodebpy.build_ppm_tree, first_interval=3.0)
 
 
 def unregister():
     # Allow safe unregistering if needed
     chezmoi_sync.unregister()
+    geo_coord.unregister()
     country_wireframes.unregister()
     get_extension_keys.unregister()
     flat_gis_importer.unregister()
     dynamic_script_runner.unregister()
+    gpx_import.unregister()
 
 
 if __name__ == "__main__":
