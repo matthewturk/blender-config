@@ -81,6 +81,26 @@ def _apply_property_map(target, values, label):
     return applied
 
 
+def _apply_theme_preset(theme_name):
+    """Apply a bundled or user interface theme preset by its display name."""
+    if not theme_name:
+        return
+    target_filename = theme_name.strip().lower().replace(" ", "_") + ".py"
+    for preset_dir in bpy.utils.preset_paths("interface_theme"):
+        candidate = os.path.join(preset_dir, target_filename)
+        if os.path.exists(candidate):
+            try:
+                bpy.ops.script.execute_preset(
+                    filepath=candidate,
+                    menu_idname="USERPREF_MT_interface_theme_presets",
+                )
+                print(f"[Chezmoi/Preferences] Applied theme preset: {theme_name}")
+            except Exception as e:
+                print(f"[Chezmoi/Preferences Error] Failed to apply theme '{theme_name}': {e}")
+            return
+    print(f"[Chezmoi/Preferences Warning] Theme preset not found: {theme_name}")
+
+
 def _resolve_addon_module(addons_by_name, addon_key):
     """Resolve configured add-on key to an enabled add-on module name."""
     if addon_key in addons_by_name:
@@ -125,6 +145,10 @@ def load_and_sync_chezmoi(dummy=None):
                         device.use = True
                 else:
                     cprefs.compute_device_type = "NONE"
+
+            # 3. Apply Interface Theme Preset
+            if "theme" in config:
+                _apply_theme_preset(config["theme"])
 
             print("[Chezmoi/Preferences] Applied hardware configurations successfully.")
         except Exception as e:
@@ -200,6 +224,28 @@ def load_and_sync_chezmoi(dummy=None):
         applied = _apply_property_map(prefs.filepaths, config["filepaths"], "filepaths")
         if applied:
             print(f"[Chezmoi/Preferences] Applied {applied} filepath preference(s).")
+
+    if "view" in config:
+        applied = _apply_property_map(prefs.view, config["view"], "view")
+        if applied:
+            print(f"[Chezmoi/Preferences] Applied {applied} view preference(s).")
+
+    if "edit" in config:
+        applied = _apply_property_map(prefs.edit, config["edit"], "edit")
+        if applied:
+            print(f"[Chezmoi/Preferences] Applied {applied} edit preference(s).")
+
+    if "system" in config:
+        applied = _apply_property_map(prefs.system, config["system"], "system")
+        if applied:
+            print(f"[Chezmoi/Preferences] Applied {applied} system preference(s).")
+
+    if "experimental" in config:
+        applied = _apply_property_map(
+            prefs.experimental, config["experimental"], "experimental"
+        )
+        if applied:
+            print(f"[Chezmoi/Preferences] Applied {applied} experimental preference(s).")
 
     if "external_tools" in config and isinstance(config["external_tools"], dict):
         external_tools = config["external_tools"]

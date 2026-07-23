@@ -14,11 +14,16 @@ In addition to render/device and asset library settings, the startup sync now su
 
 - `input`: Directly maps onto Blender input/navigation preferences (for example: `select_mouse`, `view_rotate_method`, `use_zoom_to_mouse`).
 - `filepaths`: Directly maps onto Blender filepath preferences.
+- `view`: Directly maps onto Blender's View & Controls preferences (`preferences.view`), for example `show_developer_ui`, `show_tooltips_python`. Note `interface_scale` (above) is applied separately onto `view.ui_scale`.
+- `edit`: Directly maps onto Blender's Edit preferences (`preferences.edit`), for example `undo_steps`, `undo_memory_limit`.
+- `system`: Directly maps onto Blender's System preferences (`preferences.system`), for example `memory_cache_limit`.
+- `experimental`: Directly maps onto Blender's Experimental feature-flag preferences (`preferences.experimental`).
 - `external_tools`: Convenience aliases for external tool paths:
   - `text_editor` -> Blender `preferences.filepaths.text_editor`
   - `image_editor` -> Blender `preferences.filepaths.image_editor`
   - `animation_player` -> Blender `preferences.filepaths.animation_player`
 - `addon_preferences`: Per add-on preference values by add-on key/module.
+- `theme`: Applies a bundled or user interface theme preset by display name (for example `"Deep Grey"`), matched against Blender's installed theme presets by filename.
 
 Example external editor path for Linux is usually VS Code at `/usr/bin/code`.
 On some installations it may differ (for example Flatpak/Snap wrappers).
