@@ -198,6 +198,23 @@ def _load_geo_data():
     return world, countries_by_key, continents
 
 
+def _m49_lookup_by_iso3():
+    """Map ISO3 -> zero-padded UN M49 numeric code, via geonamescache.
+
+    geonamescache's "isonumeric" field is the same numbering as UN M49 for
+    actual countries, so this needs no separate M49 data source.
+    """
+    from geonamescache import GeonamesCache
+
+    lookup = {}
+    for info in GeonamesCache().get_countries().values():
+        iso3 = str(info.get("iso3", "")).upper()
+        m49 = info.get("isonumeric")
+        if iso3 and m49 is not None:
+            lookup[iso3] = f"{int(m49):03d}"
+    return lookup
+
+
 def _blue_marble_fallback_path():
     return os.path.join(tempfile.gettempdir(), "blender_geo_blue_marble.png")
 
@@ -1073,6 +1090,7 @@ def _create_boundary_wire_object_from_lines(
     continent_name,
     iso2,
     iso3,
+    m49="",
     max_segment_deg=0.0,
     spherical_tolerance_deg=0.0,
     coord_settings=None,
@@ -1106,6 +1124,13 @@ def _create_boundary_wire_object_from_lines(
     mesh.from_pydata(vertices, edges, [])
     mesh.update()
 
+    # Point-domain copy of geo_m49, so Geometry Nodes can read it via
+    # Object Info -> Geometry -> Named Attribute("geo_m49") given a picked
+    # object - custom (ID) properties like the one set below aren't
+    # reachable from inside a node tree, only real geometry attributes are.
+    m49_attr = mesh.attributes.new(name="geo_m49", type="INT", domain="POINT")
+    m49_attr.data.foreach_set("value", [int(m49) if m49 else -1] * len(vertices))
+
     obj = bpy.data.objects.new(obj_name, mesh)
     obj.display_type = "WIRE"
     obj["geo_kind"] = kind
@@ -1113,6 +1138,7 @@ def _create_boundary_wire_object_from_lines(
     obj["geo_continent"] = continent_name
     obj["geo_iso2"] = iso2
     obj["geo_iso3"] = iso3
+    obj["geo_m49"] = m49
     collection.objects.link(obj)
     return obj
 
@@ -1127,6 +1153,7 @@ def _create_curve_outline_object_from_lines(
     continent_name,
     iso2,
     iso3,
+    m49="",
     max_segment_deg=0.0,
     spherical_tolerance_deg=0.0,
     spline_type="NURBS",
@@ -1191,6 +1218,7 @@ def _create_curve_outline_object_from_lines(
     obj["geo_continent"] = continent_name
     obj["geo_iso2"] = iso2
     obj["geo_iso3"] = iso3
+    obj["geo_m49"] = m49
     collection.objects.link(obj)
     return obj
 
@@ -1724,6 +1752,7 @@ def _create_boundary_wire_object(
     continent_name,
     iso2,
     iso3,
+    m49="",
     max_segment_deg=0.0,
     spherical_tolerance_deg=0.0,
     coord_settings=None,
@@ -1739,6 +1768,7 @@ def _create_boundary_wire_object(
         continent_name=continent_name,
         iso2=iso2,
         iso3=iso3,
+        m49=m49,
         max_segment_deg=max_segment_deg,
         spherical_tolerance_deg=spherical_tolerance_deg,
         coord_settings=coord_settings,
@@ -1760,6 +1790,7 @@ def _create_reference_globe(collection, radius, resolution):
     obj["geo_continent"] = ""
     obj["geo_iso2"] = ""
     obj["geo_iso3"] = ""
+    obj["geo_m49"] = ""
     for poly in mesh.polygons:
         poly.use_smooth = True
     collection.objects.link(obj)
@@ -1959,6 +1990,7 @@ def _make_linked_instance(
     continent_name,
     iso2,
     iso3,
+    m49="",
 ):
     obj = bpy.data.objects.new(name, source_mesh)
     obj.location = location
@@ -1968,6 +2000,7 @@ def _make_linked_instance(
     obj["geo_continent"] = continent_name
     obj["geo_iso2"] = iso2
     obj["geo_iso3"] = iso3
+    obj["geo_m49"] = m49
     collection.objects.link(obj)
     return obj
 
@@ -1998,6 +2031,10 @@ def _write_anchor_attributes(anchor_obj, items):
         if attr_iso3 is None:
             attr_iso3 = mesh.attributes.new("geo_iso3", "STRING", "POINT")
 
+        attr_m49 = mesh.attributes.get("geo_m49")
+        if attr_m49 is None:
+            attr_m49 = mesh.attributes.new("geo_m49", "STRING", "POINT")
+
         attr_index = mesh.attributes.get("geo_index")
         if attr_index is None:
             attr_index = mesh.attributes.new("geo_index", "INT", "POINT")
@@ -2020,6 +2057,7 @@ def _write_anchor_attributes(anchor_obj, items):
         attr_cont.data[i].value = _as_attr_bytes(item["continent"])
         attr_iso2.data[i].value = _as_attr_bytes(item["iso2"])
         attr_iso3.data[i].value = _as_attr_bytes(item["iso3"])
+        attr_m49.data[i].value = _as_attr_bytes(item["m49"])
         attr_index.data[i].value = i
         attr_uv.data[i].vector = item["uv"]
 
@@ -2951,6 +2989,8 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
+        m49_lookup = _m49_lookup_by_iso3()
+
         country_radius = max(coord_settings.globe_radius * settings.marker_scale, 0.0001)
         continent_radius = max(
             coord_settings.globe_radius * settings.continent_scale,
@@ -3065,6 +3105,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                 continent_name = str(row["continent"])
                 iso2 = str(row["iso_a2"])
                 iso3 = str(row["iso_a3"])
+                m49 = m49_lookup.get(iso3.upper(), "")
 
                 if settings.generation_mode == "BOUNDARY":
                     created_obj = _create_boundary_wire_object(
@@ -3077,6 +3118,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         continent_name=continent_name,
                         iso2=iso2,
                         iso3=iso3,
+                        m49=m49,
                         coord_settings=coord_settings,
                         latlon_bounds=latlon_bounds,
                     )
@@ -3094,6 +3136,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         continent_name=continent_name,
                         iso2=iso2,
                         iso3=iso3,
+                        m49=m49,
                     )
 
                 anchor_points.append(location)
@@ -3104,6 +3147,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         "continent": continent_name,
                         "iso2": iso2,
                         "iso3": iso3,
+                        "m49": m49,
                         "uv": _to_uv(lat, lon),
                     }
                 )
@@ -3160,6 +3204,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         "continent": continent_name,
                         "iso2": "",
                         "iso3": "",
+                        "m49": "",
                         "uv": _to_uv(lat, lon),
                     }
                 )
