@@ -95,6 +95,23 @@ def _write_string_attribute(obj_data, name, values, domain):
         item.value = str(value).encode("utf-8")
 
 
+def _read_curve_group_names(curves_data):
+    """Read the "group_name" CURVE attribute back, in curve order.
+
+    Used as the single source of truth for the Group Names node group,
+    instead of separately threading the in-memory Python list through -
+    reading from what was actually persisted guarantees the two can never
+    silently drift apart, no matter how the surrounding code changes later.
+    """
+    attr = curves_data.attributes.get("group_name")
+    if attr is None:
+        raise ValueError("Curves data has no 'group_name' CURVE attribute to read back")
+    return [
+        item.value.decode("utf-8") if isinstance(item.value, bytes) else str(item.value)
+        for item in attr.data
+    ]
+
+
 def _build_group_names_node_group(name, group_names):
     """(Re)build a freestanding node group exposing `group_names` as an ordered,
     per-curve field - the same string-join + Split String trick as
@@ -226,8 +243,24 @@ def execute(context, params):
         db.store_named_attribute(obj, arr, attr_name, domain=db.AttributeDomains.POINT)
     _write_string_attribute(curves_data, "group_name", group_names_per_curve, domain="CURVE")
 
+    # Read the group order back from what was actually stored rather than
+    # reusing the in-memory array above, and check it round-tripped intact.
+    # This is the guarantee the CURVE attribute and the Group Names node
+    # group can never disagree on order: both ultimately come from this one
+    # read, not two independently-carried copies of "the same" list.
+    stored_group_names = _read_curve_group_names(curves_data)
+    expected_group_names = group_names_per_curve.tolist()
+    if stored_group_names != expected_group_names:
+        raise RuntimeError(
+            "group_name attribute round-trip mismatch after writing - "
+            f"expected {expected_group_names!r}, read back {stored_group_names!r}. "
+            "This means _write_string_attribute (or Blender's own STRING "
+            "attribute storage) reordered or corrupted the data; the Group "
+            "Names node group was NOT built to avoid propagating bad data."
+        )
+
     node_group_name = f"{object_name} Group Names"
-    _build_group_names_node_group(node_group_name, group_names_per_curve.tolist())
+    _build_group_names_node_group(node_group_name, stored_group_names)
 
     # Hundreds of thousands of curves - especially stacked at the origin
     # with zero-filled positions - can make the viewport unresponsive.

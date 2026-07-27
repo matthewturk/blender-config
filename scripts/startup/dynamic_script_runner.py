@@ -342,7 +342,7 @@ class NODE_OT_run_script(bpy.types.Operator):
         mod = NODE_SCRIPT_REGISTRY.get(self.script_name)
         if mod and hasattr(mod, "PARAMS") and mod.PARAMS:
             return context.window_manager.invoke_props_dialog(self)
-        return self.execute(context, event)
+        return self.execute(context)
 
     def draw(self, context):
         mod = NODE_SCRIPT_REGISTRY.get(self.script_name)

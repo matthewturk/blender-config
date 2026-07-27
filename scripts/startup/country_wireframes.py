@@ -732,6 +732,32 @@ def _to_uv(lat_deg, lon_deg):
     return (u, v)
 
 
+def _collapse_outliner_view():
+    """Collapse the whole Outliner tree, if one is visible in the current
+    screen layout.
+
+    There's no per-collection "start collapsed" property exposed to Python -
+    that expand/collapse state lives in the Outliner's own private UI
+    session data, not on the Collection itself - so bpy.ops.outliner.
+    collapse_all() (a UI operator, not a pure data one) is the only lever
+    available, and it's necessarily all-or-nothing across whatever's
+    currently shown in the outliner, not scoped to just the collections
+    this script just created. Silently does nothing if no Outliner area is
+    open (e.g. a non-default screen layout, or running headless).
+    """
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type != "OUTLINER":
+                continue
+            region = next((r for r in area.regions if r.type == "WINDOW"), None)
+            if region is None:
+                continue
+            with bpy.context.temp_override(window=window, area=area, region=region):
+                bpy.ops.outliner.collapse_all()
+            return True
+    return False
+
+
 def _get_or_create_collection(parent, name):
     existing = bpy.data.collections.get(name)
     if existing is None:
@@ -2724,6 +2750,7 @@ class OBJECT_OT_import_geojson_wireframes(bpy.types.Operator, ImportHelper):
                 f"{points_created} point marker(s)."
             ),
         )
+        _collapse_outliner_view()
         return {"FINISHED"}
 
 
@@ -2823,6 +2850,7 @@ class OBJECT_OT_import_osm_overpass(bpy.types.Operator):
                 f"{points_created} point marker(s)."
             ),
         )
+        _collapse_outliner_view()
         return {"FINISHED"}
 
 
@@ -3235,6 +3263,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                 f"Created {created} geo marker instance(s).",
             )
 
+        _collapse_outliner_view()
         return {"FINISHED"}
 
 
