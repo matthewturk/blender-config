@@ -16,7 +16,7 @@ In addition to render/device and asset library settings, the startup sync now su
 - `filepaths`: Directly maps onto Blender filepath preferences.
 - `view`: Directly maps onto Blender's View & Controls preferences (`preferences.view`), for example `show_developer_ui`, `show_tooltips_python`. Note `interface_scale` (above) is applied separately onto `view.ui_scale`.
 - `edit`: Directly maps onto Blender's Edit preferences (`preferences.edit`), for example `undo_steps`, `undo_memory_limit`.
-- `system`: Directly maps onto Blender's System preferences (`preferences.system`), for example `memory_cache_limit`.
+- `system`: Directly maps onto Blender's System preferences (`preferences.system`), for example `memory_cache_limit`, `gpu_backend` (the "Display Graphics" backend setting — `"OPENGL"` or `"VULKAN"`, `"METAL"` on macOS; requires an application restart to take effect).
 - `experimental`: Directly maps onto Blender's Experimental feature-flag preferences (`preferences.experimental`).
 - `external_tools`: Convenience aliases for external tool paths:
   - `text_editor` -> Blender `preferences.filepaths.text_editor`
