@@ -13,10 +13,22 @@ NAME = "PPM 1D Interpolation"
 # overshoot elsewhere) - before being translated into this node graph.
 #
 # Density is "Samples Per Unit" (of x), not a fixed count per original
-# point: an internal, x-positioned linear (POLY) proxy curve drives
-# Blender's native arc-length resampling, so a wide gap between points
-# (e.g. a missing year) naturally gets proportionally more samples instead
-# of being treated as an equal-width step.
+# point, combined with explicit "X Min"/"X Max" bounds: total output count
+# is round(samples_per_unit * (X Max - X Min)), fixed regardless of the
+# actual data's own x-range, so different inputs (e.g. different country
+# pairs with different year coverage) always produce the same number of
+# outputs. The output points are generated directly, evenly spaced across
+# [X Min, X Max] (via a Curve Line + Resample by Count) - NOT derived from
+# resampling the data itself. An internal, x-positioned linear (POLY) proxy
+# curve of the original data is then queried at each output point's factor
+# via Sample Curve, which interpolates "which original interval, how far
+# into it" at any arbitrary position, regardless of the data's own point
+# count or how many output samples were requested. If X Min/X Max extend
+# past the data's actual range, the factor is clamped to [0, 1] by hand
+# (Sample Curve doesn't clamp automatically - confirmed against nodebpy's
+# source, unlike Sample Index which has an explicit clamp option), which
+# extrapolates using the boundary's own value - the same "flat" treatment
+# already used for boundary cells below.
 #
 # Rebuilding this group (rerunning this script) still clears and recreates
 # its whole interface, same as it always has - nodebpy's tree-builder
@@ -89,32 +101,51 @@ def build(tree, params):
     attr_name = tree.inputs.string("Attribute Name", "value")
     x_attr_name = tree.inputs.string("X Attribute Name", "x")
     samples_per_unit = tree.inputs.float("Samples Per Unit", 4.0, min_value=0.01)
+    x_min = tree.inputs.float("X Min", 0.0)
+    x_max = tree.inputs.float("X Max", 1.0)
     use_limiter = tree.inputs.boolean("Use Limiter", True)
 
     original_count = g.DomainSize(geometry, component="CURVE").o.point_count
 
     # ── auxiliary linear (POLY) curve positioned by x - an internal
-    # scaffold only, never part of the output. Arc length between its
-    # points equals the true x spacing exactly (POLY = straight segments),
-    # so resampling it by Count with Blender's native arc-length
-    # distribution naturally puts more samples in wider gaps. Its
-    # "_orig_index" attribute (0..N-1) gets linearly interpolated through
-    # that same resample for free, giving a continuous "which original
-    # interval, how far into it" lookup with no hand-rolled search. ──
+    # scaffold only, never part of the output, and never resampled itself:
+    # Sample Curve (below) interpolates its "_orig_index" attribute at any
+    # arbitrary factor regardless of how many points this curve has. Arc
+    # length between its points equals the true x spacing exactly (POLY =
+    # straight segments), so a factor of 0..1 along it maps linearly onto
+    # the data's own x range. ──
     aux = g.SetSplineType(geometry, spline_type="POLY")
     aux = g.SetPosition(
         aux, position=g.CombineXYZ(x=g.NamedAttribute.float(x_attr_name), y=0.0, z=0.0)
     )
     aux = g.StoreNamedAttribute.point.float(aux, name="_orig_index", value=g.Index())
 
-    x_range = g.AttributeStatistic.point.float(
+    x_stats = g.AttributeStatistic.point.float(
         geometry, attribute=g.NamedAttribute.float(x_attr_name)
-    ).o.range
-    total_samples = g.Math.maximum(1, g.Math.round(samples_per_unit * x_range))
+    )
+    data_x_min = x_stats.o.min
+    data_x_max = x_stats.o.max
+    # Guards against a degenerate 0-width data range (e.g. a single point)
+    # producing a 0/0 factor below.
+    data_x_span = g.Math.maximum(data_x_max - data_x_min, 1e-8)
 
-    resampled = g.ResampleCurve(aux, mode="Count", count=total_samples)
+    # ── output points: generated directly, evenly spaced across the
+    # explicit [X Min, X Max] bounds - independent of the data's own range,
+    # so the output count is always exactly this, regardless of input. ──
+    total_samples = g.Math.maximum(1, g.Math.round(samples_per_unit * (x_max - x_min)))
+    output_line = g.CurveLine.points(
+        start=g.CombineXYZ(x=x_min, y=0.0, z=0.0),
+        end=g.CombineXYZ(x=x_max, y=0.0, z=0.0),
+    )
+    output_points = g.ResampleCurve(output_line, mode="Count", count=total_samples)
 
-    continuous_idx = g.NamedAttribute.float("_orig_index")  # evaluated on `resampled`
+    sample_x = g.SeparateXYZ(g.Position()).o.x  # evaluated on `output_points`
+    factor_raw = (sample_x - data_x_min) / data_x_span
+    factor = g.Math.maximum(0.0, g.Math.minimum(factor_raw, 1.0))
+
+    continuous_idx = g.SampleCurve.factor.float(
+        curves=aux, value=g.NamedAttribute.float("_orig_index"), factor=factor
+    ).o.value
     xi = g.Math.fraction(continuous_idx)
     parent_idx = g.Math.floor(continuous_idx)
 
@@ -178,9 +209,9 @@ def build(tree, params):
     a6 = 6.0 * a_c - 3.0 * (a_l + a_r)
     ppm_val = a_l + xi * (da + a6 * (1.0 - xi))
 
-    interpolated_x = g.SeparateXYZ(g.Position()).o.x
-
-    result = g.StoreNamedAttribute.point.float(resampled, name="ppm_value", value=ppm_val)
-    result = g.StoreNamedAttribute.point.float(result, name="x", value=interpolated_x)
+    # sample_x is already output_points' own position.x by construction
+    # (evenly spaced across [X Min, X Max]) - no need to re-derive it.
+    result = g.StoreNamedAttribute.point.float(output_points, name="ppm_value", value=ppm_val)
+    result = g.StoreNamedAttribute.point.float(result, name="x", value=sample_x)
 
     result >> tree.outputs.geometry("Output")
