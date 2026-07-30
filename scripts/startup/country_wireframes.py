@@ -21,9 +21,31 @@ from .geo_coord import (
     project_point,
 )
 
-_LEGACY_BLUE_MARBLE_URL = (
-    "https://eoimages.gsfc.nasa.gov/images/imagerecords/74000/"
-    "74117/world.topo.bathy.200412.3x5400x2700.jpg"
+# NASA Visible Earth "Blue Marble Next Generation" (Dec. 2004), cloud-free.
+# The imagerecords folder number below was verified live (curl) - NASA
+# reorganized their directory numbering at some point, and the folder this
+# constant used to point at (74000/74117) now 404s; 73000/73909 serves the
+# exact same image. Two resolutions are confirmed to exist at this record:
+# 5400x2700 (~2.6 MB) and 21600x10800 (~30 MB, ~700 MB uncompressed in
+# VRAM) - no in-between sizes are published for this specific image.
+_BLUE_MARBLE_STANDARD_URL = (
+    "https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/"
+    "73909/world.topo.bathy.200412.3x5400x2700.jpg"
+)
+_BLUE_MARBLE_FULL_RES_URL = (
+    "https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/"
+    "73909/world.topo.bathy.200412.3x21600x10800.jpg"
+)
+_LEGACY_BLUE_MARBLE_URL = _BLUE_MARBLE_STANDARD_URL
+
+# NASA's companion cloud-layer texture (same Blue Marble collection):
+# black = clear sky, white = cloud - used as a mix factor, not an alpha
+# channel (the file has no transparency). Only a 2048x1024 size is
+# published at this record (verified) - which is plenty, since clouds are
+# a soft decorative overlay here, not the primary detail source.
+_BLUE_MARBLE_CLOUDS_URL = (
+    "https://eoimages.gsfc.nasa.gov/images/imagerecords/57000/"
+    "57747/cloud_combined_2048.jpg"
 )
 
 
@@ -298,6 +320,14 @@ def _resolve_blue_marble_url(raw_url):
     if not url or url == _LEGACY_BLUE_MARBLE_URL or url == _blue_marble_fallback_url():
         return _file_url_from_path(_ensure_blue_marble_fallback_texture())
     return url
+
+
+def _resolve_blue_marble_quality_url(quality, custom_url):
+    if quality == "STANDARD":
+        return _BLUE_MARBLE_STANDARD_URL
+    if quality == "FULL":
+        return _BLUE_MARBLE_FULL_RES_URL
+    return _resolve_blue_marble_url(custom_url)
 
 
 def _normalize_vec3(vec):
@@ -1921,7 +1951,29 @@ def _convert_raster_to_png(source_path, max_size=4096):
     return target_path
 
 
-def _ensure_texture_material(material_name, image_path):
+def _visible_socket_by_name(sockets, name):
+    """Like _socket_by_name, but skips hidden sockets first.
+
+    Needed for the generic "Mix" shader node: it carries Float/Vector/Color
+    variants of "A"/"B"/"Factor"/"Result" simultaneously, all sharing the
+    same display name, with only the variant matching the node's data_type
+    left un-hidden. Plain name lookup is ambiguous there; this isn't,
+    unless every match happens to be hidden, in which case it falls back to
+    the plain lookup rather than returning nothing.
+    """
+    for socket in sockets:
+        if socket.name == name and not socket.hide:
+            return socket
+    return _socket_by_name(sockets, name)
+
+
+def _ensure_texture_material(
+    material_name,
+    image_path,
+    clouds_image_path=None,
+    animate_clouds=False,
+    cloud_rotation_period_frames=500.0,
+):
     image = bpy.data.images.load(image_path, check_existing=True)
     material = bpy.data.materials.get(material_name)
     if material is None:
@@ -1932,17 +1984,14 @@ def _ensure_texture_material(material_name, image_path):
     links = material.node_tree.links
     nodes.clear()
 
-    tex_coord = nodes.new("ShaderNodeTexCoord")
-    tex_coord.location = (-700, 0)
-
     uv_map = nodes.new("ShaderNodeUVMap")
     uv_map.uv_map = "GeoUV"
-    uv_map.location = (-700, -180)
+    uv_map.location = (-900, 0)
 
     image_tex = nodes.new("ShaderNodeTexImage")
     image_tex.image = image
     image_tex.interpolation = "Smart"
-    image_tex.location = (-420, 0)
+    image_tex.location = (-620, 200)
 
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
     bsdf.location = (-120, 0)
@@ -1952,24 +2001,101 @@ def _ensure_texture_material(material_name, image_path):
 
     uv_out = _socket_by_name(uv_map.outputs, "UV")
     tex_vec = _socket_by_name(image_tex.inputs, "Vector")
-    tex_color = _socket_by_name(image_tex.outputs, "Color")
+    base_color_socket = _socket_by_name(image_tex.outputs, "Color")
     bsdf_base = _socket_by_name(bsdf.inputs, "Base Color")
     bsdf_out = _socket_by_name(bsdf.outputs, "BSDF")
     out_surface = _socket_by_name(output.inputs, "Surface")
 
     if uv_out is not None and tex_vec is not None:
         links.new(uv_out, tex_vec)
-    if tex_color is not None and bsdf_base is not None:
-        links.new(tex_color, bsdf_base)
+
+    if clouds_image_path:
+        clouds_image = bpy.data.images.load(clouds_image_path, check_existing=True)
+
+        # Own Mapping node (not a direct link to uv_map) so its rotation can
+        # be driven independently of the land texture underneath - that's
+        # the entire "clouds move" effect: a static cloud texture, slowly
+        # rotated, layered over an otherwise-static planet.
+        cloud_mapping = nodes.new("ShaderNodeMapping")
+        cloud_mapping.location = (-620, -280)
+        cloud_uv_in = _socket_by_name(cloud_mapping.inputs, "Vector")
+        cloud_uv_out = _socket_by_name(cloud_mapping.outputs, "Vector")
+        if uv_out is not None and cloud_uv_in is not None:
+            links.new(uv_out, cloud_uv_in)
+
+        if animate_clouds:
+            rotation_input = _socket_by_name(cloud_mapping.inputs, "Rotation")
+            period = max(1.0, float(cloud_rotation_period_frames))
+            fcurve = rotation_input.driver_add("default_value", 2)
+            driver = fcurve.driver
+            driver.type = "SCRIPTED"
+            var = driver.variables.new()
+            var.name = "frame"
+            var.type = "SINGLE_PROP"
+            var.targets[0].id_type = "SCENE"
+            var.targets[0].id = context.scene
+            var.targets[0].data_path = "frame_current"
+            driver.expression = f"frame * (2 * pi / {period})"
+
+        cloud_tex = nodes.new("ShaderNodeTexImage")
+        cloud_tex.image = clouds_image
+        cloud_tex.interpolation = "Smart"
+        cloud_tex.location = (-380, -280)
+        cloud_tex_vec = _socket_by_name(cloud_tex.inputs, "Vector")
+        cloud_tex_color = _socket_by_name(cloud_tex.outputs, "Color")
+        if cloud_uv_out is not None and cloud_tex_vec is not None:
+            links.new(cloud_uv_out, cloud_tex_vec)
+
+        cloud_factor_node = nodes.new("ShaderNodeRGBToBW")
+        cloud_factor_node.location = (-150, -280)
+        cloud_factor_in = _socket_by_name(cloud_factor_node.inputs, "Color")
+        cloud_factor_out = _socket_by_name(cloud_factor_node.outputs, "Val")
+        if cloud_tex_color is not None and cloud_factor_in is not None:
+            links.new(cloud_tex_color, cloud_factor_in)
+
+        # cloud_combined_2048.jpg has no alpha channel (black = clear sky,
+        # white = cloud) - its own brightness (via RGBToBW above) is the
+        # mix factor, not transparency.
+        cloud_mix = nodes.new("ShaderNodeMix")
+        cloud_mix.data_type = "RGBA"
+        cloud_mix.location = (100, -140)
+        mix_fac = _visible_socket_by_name(cloud_mix.inputs, "Factor")
+        mix_a = _visible_socket_by_name(cloud_mix.inputs, "A")
+        mix_b = _visible_socket_by_name(cloud_mix.inputs, "B")
+        mix_result = _visible_socket_by_name(cloud_mix.outputs, "Result")
+        if mix_b is not None:
+            mix_b.default_value = (0.92, 0.92, 0.94, 1.0)
+        if cloud_factor_out is not None and mix_fac is not None:
+            links.new(cloud_factor_out, mix_fac)
+        if base_color_socket is not None and mix_a is not None:
+            links.new(base_color_socket, mix_a)
+
+        base_color_socket = mix_result
+
+    if base_color_socket is not None and bsdf_base is not None:
+        links.new(base_color_socket, bsdf_base)
     if bsdf_out is not None and out_surface is not None:
         links.new(bsdf_out, out_surface)
 
     return material
 
 
-def _apply_texture_to_reference_globe(context, settings, image_path):
+def _apply_texture_to_reference_globe(
+    context,
+    settings,
+    image_path,
+    clouds_image_path=None,
+    animate_clouds=False,
+    cloud_rotation_period_frames=500.0,
+):
     globe = _ensure_reference_globe(context, settings)
-    material = _ensure_texture_material("GeoReferenceGlobeMaterial", image_path)
+    material = _ensure_texture_material(
+        "GeoReferenceGlobeMaterial",
+        image_path,
+        clouds_image_path=clouds_image_path,
+        animate_clouds=animate_clouds,
+        cloud_rotation_period_frames=cloud_rotation_period_frames,
+    )
 
     if globe.data is None:
         raise RuntimeError("Reference globe has no mesh data.")
@@ -2656,10 +2782,56 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
             "out body geom;"
         ),
     )
+    imagery_quality: bpy.props.EnumProperty(
+        name="Blue Marble Quality",
+        description="Which NASA Blue Marble resolution to fetch",
+        items=[
+            (
+                "STANDARD",
+                "Standard (5400x2700, ~2.6 MB)",
+                "Good for a 4K render with Earth taking up a good fraction of "
+                "the frame, without excessive texture memory (~44 MB uncompressed)",
+            ),
+            (
+                "FULL",
+                "Full Resolution (21600x10800, ~30 MB)",
+                "Maximum published detail - only worth it for close zoom-ins; "
+                "~700 MB uncompressed in VRAM",
+            ),
+            (
+                "CUSTOM",
+                "Custom URL",
+                "Use the 'Blue Marble URL' field below instead",
+            ),
+        ],
+        default="STANDARD",
+    )
     imagery_blue_marble_url: bpy.props.StringProperty(
         name="Blue Marble URL",
-        description="Open equirectangular Earth image URL or file URL",
+        description="Open equirectangular Earth image URL or file URL (only used when Quality is 'Custom URL')",
         default=_blue_marble_fallback_url(),
+    )
+    imagery_use_clouds: bpy.props.BoolProperty(
+        name="Add Cloud Layer",
+        description="Blend NASA's cloud-layer texture over the Blue Marble base texture",
+        default=False,
+    )
+    imagery_clouds_url: bpy.props.StringProperty(
+        name="Clouds URL",
+        description="Equirectangular cloud-layer image URL (black=clear, white=cloud)",
+        default=_BLUE_MARBLE_CLOUDS_URL,
+    )
+    imagery_animate_clouds: bpy.props.BoolProperty(
+        name="Animate Clouds",
+        description="Slowly rotate the cloud layer independently of the land texture, driven by the current frame",
+        default=False,
+    )
+    imagery_cloud_rotation_period_frames: bpy.props.FloatProperty(
+        name="Cloud Rotation Period (frames)",
+        description="Frames for the cloud layer to complete one full rotation",
+        default=500.0,
+        min=1.0,
+        max=100000.0,
     )
     imagery_max_size: bpy.props.IntProperty(
         name="Imagery Max Size",
@@ -2864,18 +3036,19 @@ class OBJECT_OT_apply_blue_marble_texture(bpy.types.Operator):
 
     def invoke(self, context, _event):
         settings = context.scene.country_wireframe_settings
-        try:
-            url = _resolve_blue_marble_url(settings.imagery_blue_marble_url)
-        except Exception as exc:
-            self.report({"ERROR"}, f"Blue Marble texture source is unavailable: {exc}")
-            return {"CANCELLED"}
-
-        settings.imagery_blue_marble_url = url
+        if settings.imagery_quality == "CUSTOM":
+            try:
+                url = _resolve_blue_marble_url(settings.imagery_blue_marble_url)
+            except Exception as exc:
+                self.report({"ERROR"}, f"Blue Marble texture source is unavailable: {exc}")
+                return {"CANCELLED"}
+            settings.imagery_blue_marble_url = url
 
         if settings.imagery_require_confirmation:
+            extra = " plus a cloud layer" if settings.imagery_use_clouds else ""
             self.preflight_warning = (
-                "This downloads a remote image into Blender's main process. "
-                f"Max allowed download is {int(settings.imagery_max_download_mb)} MB."
+                f"This downloads a remote image{extra} into Blender's main process. "
+                f"Max allowed download is {int(settings.imagery_max_download_mb)} MB per file."
             )
             return context.window_manager.invoke_props_dialog(self, width=560)
 
@@ -2892,25 +3065,43 @@ class OBJECT_OT_apply_blue_marble_texture(bpy.types.Operator):
     def execute(self, context):
         settings = context.scene.country_wireframe_settings
         try:
-            url = _resolve_blue_marble_url(settings.imagery_blue_marble_url)
+            url = _resolve_blue_marble_quality_url(
+                settings.imagery_quality, settings.imagery_blue_marble_url
+            )
         except Exception as exc:
             self.report({"ERROR"}, f"Blue Marble texture source is unavailable: {exc}")
             return {"CANCELLED"}
 
-        settings.imagery_blue_marble_url = url
+        if settings.imagery_quality == "CUSTOM":
+            settings.imagery_blue_marble_url = url
+
+        max_bytes = max(1, int(settings.imagery_max_download_mb)) * 1024 * 1024
+        timeout = max(5, int(settings.osm_timeout_seconds))
 
         try:
-            temp_path = _download_url_to_temp_file(
-                url,
-                timeout_seconds=max(5, int(settings.osm_timeout_seconds)),
-                max_bytes=max(1, int(settings.imagery_max_download_mb)) * 1024 * 1024,
+            temp_path = _download_url_to_temp_file(url, timeout_seconds=timeout, max_bytes=max_bytes)
+
+            clouds_path = None
+            if settings.imagery_use_clouds:
+                clouds_url = str(settings.imagery_clouds_url).strip() or _BLUE_MARBLE_CLOUDS_URL
+                clouds_path = _download_url_to_temp_file(
+                    clouds_url, timeout_seconds=timeout, max_bytes=max_bytes
+                )
+
+            globe = _apply_texture_to_reference_globe(
+                context,
+                settings,
+                temp_path,
+                clouds_image_path=clouds_path,
+                animate_clouds=settings.imagery_animate_clouds,
+                cloud_rotation_period_frames=settings.imagery_cloud_rotation_period_frames,
             )
-            globe = _apply_texture_to_reference_globe(context, settings, temp_path)
         except Exception as exc:
             self.report({"ERROR"}, f"Failed applying Blue Marble texture: {exc}")
             return {"CANCELLED"}
 
-        self.report({"INFO"}, f"Blue Marble texture applied to '{globe.name}'.")
+        cloud_note = " with cloud layer" if clouds_path else ""
+        self.report({"INFO"}, f"Blue Marble texture{cloud_note} applied to '{globe.name}'.")
         return {"FINISHED"}
 
 
@@ -3502,8 +3693,19 @@ class VIEW3D_PT_country_wireframes_imagery(bpy.types.Panel):
         layout = self.layout
         settings = context.scene.country_wireframe_settings
 
-        layout.prop(settings, "imagery_blue_marble_url")
+        layout.prop(settings, "imagery_quality")
+        if settings.imagery_quality == "CUSTOM":
+            layout.prop(settings, "imagery_blue_marble_url")
         layout.prop(settings, "imagery_max_size")
+
+        layout.separator()
+
+        layout.prop(settings, "imagery_use_clouds")
+        if settings.imagery_use_clouds:
+            layout.prop(settings, "imagery_clouds_url")
+            layout.prop(settings, "imagery_animate_clouds")
+            if settings.imagery_animate_clouds:
+                layout.prop(settings, "imagery_cloud_rotation_period_frames")
 
         layout.separator()
 

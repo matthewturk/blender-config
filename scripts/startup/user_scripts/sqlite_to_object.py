@@ -26,8 +26,18 @@ PARAMS = {
     "query": {
         "type": "STRING",
         "default": "",
-        "name": "SQL Query",
-        "description": "SQL query to run; every result column becomes a point attribute",
+        "name": "SQL Query (short)",
+        "description": "SQL query for simple one-liners. Ignored if 'SQL Query Text Block' below is set - use that for anything longer",
+    },
+    "query_text": {
+        "type": "POINTER",
+        "target": "Text",
+        "name": "SQL Query Text Block",
+        "description": (
+            "A Text Editor datablock holding the SQL query, for proper "
+            "multi-line editing - a plain string field can only ever be a "
+            "single line. Takes priority over 'SQL Query (short)' if set"
+        ),
     },
     "object_name": {
         "type": "STRING",
@@ -86,7 +96,8 @@ def _store_column(obj, obj_data, name, series):
 
 def execute(context, params):
     db_path = bpy.path.abspath(params["db_path"])
-    query = params["query"].strip()
+    query_text = params.get("query_text")
+    query = query_text.as_string().strip() if query_text is not None else params["query"].strip()
     object_name = params["object_name"]
     target_collection = params["target_collection"] or context.scene.collection
     output_type = params["output_type"]
