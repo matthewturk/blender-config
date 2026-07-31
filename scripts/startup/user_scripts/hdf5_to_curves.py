@@ -10,6 +10,17 @@ from nodebpy import geometry as g
 # A CURVE-domain "group_name" attribute records which HDF5 group each curve
 # came from, since Blender may rename/truncate object names on re-runs.
 #
+# Each group's own HDF5 *attributes* (group.attrs - not its child datasets)
+# also become CURVE-domain attributes, one value per curve - e.g. an "m49"
+# attribute identifying which country a group represents becomes a Blender
+# "m49" CURVE attribute directly, no separate conversion step. Only scalar
+# group attributes are used (a group attribute that's itself an array has no
+# sensible single per-curve value); groups missing a given attribute that
+# other groups have get a filled-in default (0 or "", matching the missing-
+# dataset behavior for point attributes below). If any group's value for an
+# attribute name is a string, the whole attribute is written as STRING;
+# otherwise it's numeric (int if every value is integer-valued, else float).
+#
 # Also (re)builds a freestanding "<object_name> Group Names" geometry node
 # group exposing that same group order as a per-curve field - Geometry
 # Nodes' Named Attribute node can't read STRING attributes, so this rebuilds
@@ -77,6 +88,23 @@ def _gather_group_datasets(group):
     if len(set(lengths.values())) > 1:
         raise ValueError(f"Group '{group.name}' has datasets of mismatched length: {lengths}")
     return datasets
+
+
+def _gather_group_attrs(group):
+    """Return {attr_name: raw_value} for one HDF5 group's own attributes
+    (group.attrs, distinct from its child datasets) - e.g. an "m49" or
+    "code" attribute identifying which real-world entity (country, etc.)
+    this group/curve represents. Non-scalar attributes are skipped (with a
+    warning) since CURVE-domain data is exactly one value per curve, and an
+    array-valued group attribute has no single sensible value to store.
+    """
+    attrs = {}
+    for key, value in group.attrs.items():
+        if np.ndim(value) != 0:
+            print(f"Skipping group attribute '{key}' on '{group.name}': not scalar (shape {np.shape(value)})")
+            continue
+        attrs[key] = value
+    return attrs
 
 
 def _write_string_attribute(obj_data, name, values, domain):
@@ -193,27 +221,55 @@ def execute(context, params):
                 print(f"Skipping empty group '{name}'")
                 continue
             n_points = next(iter(datasets.values())).shape[0]
-            curves.append((name, n_points, datasets))
+            group_attrs = _gather_group_attrs(root[name])
+            curves.append((name, n_points, datasets, group_attrs))
 
         if not curves:
             raise ValueError(f"No groups with datasets found under '{curves_root}'")
 
-        curve_lengths = [n for _, n, _ in curves]
+        curve_lengths = [n for _, n, _, _ in curves]
         positions = np.concatenate(
-            [_resolve_positions(root[name], position_dataset, n) for name, n, _ in curves]
+            [_resolve_positions(root[name], position_dataset, n) for name, n, _, _ in curves]
         )
 
-        attr_names = sorted({key for _, _, datasets in curves for key in datasets})
+        attr_names = sorted({key for _, _, datasets, _ in curves for key in datasets})
         point_attrs = {
             attr_name: np.concatenate(
                 [
                     datasets.get(attr_name, np.full(n, np.nan, dtype=np.float32))
-                    for _, n, datasets in curves
+                    for _, n, datasets, _ in curves
                 ]
             )
             for attr_name in attr_names
         }
-        group_names_per_curve = np.array([name for name, _, _ in curves])
+        group_names_per_curve = np.array([name for name, _, _, _ in curves])
+
+        # Each group's own HDF5 attributes (group.attrs) become CURVE-domain
+        # attributes, one value per curve - see module docstring.
+        group_attr_names = sorted({key for _, _, _, attrs in curves for key in attrs})
+        curve_attrs = {}
+        for attr_name in group_attr_names:
+            if attr_name == "group_name":
+                print("Skipping HDF5 group attribute 'group_name': reserved for curve ordering")
+                continue
+            raw_values = [attrs.get(attr_name) for _, _, _, attrs in curves]
+            # A group simply missing this attribute (None, from .get()'s
+            # default) must NOT force the whole attribute into STRING mode -
+            # only an actually-present string/bytes value should. Otherwise
+            # any attribute missing from even one group (a common, expected
+            # case - not every group needs the same attributes) would wrongly
+            # stop being numeric.
+            is_string = any(isinstance(v, (str, bytes)) for v in raw_values if v is not None)
+            if is_string:
+                curve_attrs[attr_name] = ("STRING", [
+                    "" if v is None else (v.decode("utf-8") if isinstance(v, bytes) else str(v))
+                    for v in raw_values
+                ])
+            else:
+                is_int = all(v is not None and float(v).is_integer() for v in raw_values)
+                filled = [0 if v is None else v for v in raw_values]
+                dtype = np.int32 if is_int else np.float32
+                curve_attrs[attr_name] = ("NUMERIC", np.array(filled, dtype=dtype))
 
     # ── Build the Curves data-block ─────────────────────────────────────
     # Rebuilding from scratch each run is simplest for varying point counts;
@@ -243,6 +299,12 @@ def execute(context, params):
         db.store_named_attribute(obj, arr, attr_name, domain=db.AttributeDomains.POINT)
     _write_string_attribute(curves_data, "group_name", group_names_per_curve, domain="CURVE")
 
+    for attr_name, (kind, values) in curve_attrs.items():
+        if kind == "STRING":
+            _write_string_attribute(curves_data, attr_name, values, domain="CURVE")
+        else:
+            db.store_named_attribute(obj, values, attr_name, domain=db.AttributeDomains.CURVE)
+
     # Read the group order back from what was actually stored rather than
     # reusing the in-memory array above, and check it round-tripped intact.
     # This is the guarantee the CURVE attribute and the Group Names node
@@ -271,7 +333,8 @@ def execute(context, params):
     print(
         f"Built '{object_name}': {len(curve_lengths)} curves, "
         f"{positions.shape[0]} points, "
-        f"attributes={list(point_attrs) + ['group_name']}, "
+        f"point attributes={list(point_attrs)}, "
+        f"curve attributes={['group_name'] + list(curve_attrs)}, "
         f"node_group='{node_group_name}'"
     )
     return {"FINISHED"}

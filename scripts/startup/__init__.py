@@ -6,6 +6,9 @@ from . import flat_gis_importer
 from . import dynamic_script_runner
 from . import gpx_import
 from . import ppm1d_nodebpy
+from . import data_visualization_menu
+from . import constant_mass_emission_generator
+from . import country_pair_batch_emitter
 import bpy
 
 # Define the Blender addon/script metadata block
@@ -31,6 +34,9 @@ def register():
     flat_gis_importer.register()
     dynamic_script_runner.register()
     gpx_import.register()
+    data_visualization_menu.register()
+    constant_mass_emission_generator.register()
+    country_pair_batch_emitter.register()
     bpy.app.timers.register(ppm1d_nodebpy.build_ppm_tree, first_interval=3.0)
 
 
@@ -43,6 +49,9 @@ def unregister():
     flat_gis_importer.unregister()
     dynamic_script_runner.unregister()
     gpx_import.unregister()
+    constant_mass_emission_generator.unregister()
+    country_pair_batch_emitter.unregister()
+    data_visualization_menu.unregister()
 
 
 if __name__ == "__main__":

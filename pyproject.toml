@@ -19,4 +19,5 @@ dependencies = [
     "yt>=4.4.2",
     "tree-clipper>=0.1.8",
     "nodebpy>=520.6.0",
+    "scipy>=1.18.0",
 ]

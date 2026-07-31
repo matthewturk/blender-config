@@ -1,9 +1,11 @@
+import re
+
 import bpy
 
 PARAMS = {
     "input_collection": {
-        "type": "COLLECTION", 
-        "default": None, 
+        "type": "COLLECTION",
+        "default": None,
         "name": "Collection to Iterate Over",
         "description": "The scene collection where properties will be queried"
     },
@@ -12,8 +14,36 @@ PARAMS = {
         "default": "Property List",
         "name": "Output Geonode Group Name",
         "description": "The geonode group name to put the outputs into"
-    }
+    },
+    "debug": {
+        "type": "BOOL",
+        "default": False,
+        "name": "Debug Output",
+        "description": "Print each object's name and every gathered property value, in the exact order they're written into the node group, to the system console",
+    },
 }
+
+
+def _natural_sort_key(name):
+    """Case-insensitive, natural (numeric-aware) sort key approximating
+    Blender's own BLI_strcasecmp_natural - which is what Collection Info's
+    "sort alphabetically" (with Separate Children checked) actually uses,
+    NOT Python's plain sorted()/str comparison. Plain sorted() is case-
+    SENSITIVE ordinal comparison, which puts every capitalized name before
+    every lowercase one (in ASCII, 'Z' < 'a') - a real, confirmed bug here:
+    mixed-case object names desynchronized this script's row order from
+    Collection Info's actual children order starting at the first lowercase
+    name, silently pointing indices at the wrong object from then on.
+
+    Each chunk is tagged (0, text) or (1, number) so chunks never compare
+    across types at the same position (e.g. a name that starts with a digit
+    next to one that doesn't) - avoiding any TypeError from comparing an int
+    to a str.
+    """
+    return [
+        (1, int(chunk)) if chunk.isdigit() else (0, chunk.lower())
+        for chunk in re.split(r"(\d+)", name) if chunk
+    ]
 
 def smart_refresh_and_sort_outputs(tree, target_strings):
     """
@@ -78,17 +108,36 @@ def smart_refresh_and_sort_outputs(tree, target_strings):
 def execute(context, params):
     collection = params["input_collection"]
     node_group_name = params["node_group_name"]
-    
-    # 3. Gather properties from the collection's objects
-    # We will grab a custom property called 'my_custom_prop'. 
-    # If it doesn't exist, we'll fall back to the object's name.
-    string_values = {_: [] for _ in list(set([item for o in collection.objects
+    debug = params["debug"]
+
+    # Sorted with _natural_sort_key - NOT collection.objects' own iteration
+    # order (link order: the order objects were added, unrelated to name),
+    # and NOT plain sorted()/o.name either (case-sensitive, see
+    # _natural_sort_key's docstring for the real bug that caused). This is
+    # deliberate: Geometry Nodes' Collection Info node (with Separate
+    # Children checked) always outputs its children in Blender's own
+    # case-insensitive natural sort order - that's documented, fixed
+    # behavior, not something we can change from this side. If these
+    # property lists are meant to be indexed with the same index Collection
+    # Info/Get List Item produces (the whole point of building them), they
+    # have to use the SAME order GN does, or every index silently points at
+    # the wrong object.
+    ordered_objects = sorted(collection.objects, key=lambda o: _natural_sort_key(o.name))
+
+    # Gather properties from the collection's objects. We will grab a custom
+    # property called 'my_custom_prop'. If it doesn't exist, we'll fall back
+    # to the object's name.
+    string_values = {_: [] for _ in list(set([item for o in ordered_objects
                                               for item in o.keys()]))}
-    for obj in collection.objects:
+    for obj in ordered_objects:
         for prop in string_values:
             prop_value = obj.get(prop, "")
             string_values[prop].append(str(prop_value))
-        
+        if debug:
+            print(f"[collection_to_lists] {obj.name}: " + ", ".join(
+                f"{prop}={obj.get(prop, '')!r}" for prop in string_values
+            ))
+
     print(f"Found {len(string_values)} items to convert into nodes.")
 
     # 4. Get or create the Geometry Nodes modifier on the target object
