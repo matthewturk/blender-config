@@ -768,12 +768,22 @@ def _collapse_outliner_view():
 
     There's no per-collection "start collapsed" property exposed to Python -
     that expand/collapse state lives in the Outliner's own private UI
-    session data, not on the Collection itself - so bpy.ops.outliner.
-    collapse_all() (a UI operator, not a pure data one) is the only lever
-    available, and it's necessarily all-or-nothing across whatever's
-    currently shown in the outliner, not scoped to just the collections
-    this script just created. Silently does nothing if no Outliner area is
-    open (e.g. a non-default screen layout, or running headless).
+    session data, not on the Collection itself - so an Outliner UI operator
+    (not a pure data one) is the only lever available, and it's necessarily
+    all-or-nothing across whatever's currently shown in the outliner, not
+    scoped to just the collections this script just created. Silently does
+    nothing if no Outliner area is open (e.g. a non-default screen layout,
+    or running headless).
+
+    bpy.ops.outliner.collapse_all() doesn't exist (confirmed via a real
+    AttributeError on Blender 5.3: "could not be found") - the actual,
+    long-standing operator is outliner.show_one_level(open=False), which
+    per its own name/docs collapses one level of the tree per call, not
+    the whole hierarchy recursively in one shot. Calling it repeatedly
+    (well past any realistic nesting depth this project's collections
+    reach) reliably fully collapses regardless of exactly how many levels
+    a single call actually closes - extra calls once nothing's left to
+    collapse are harmless no-ops.
     """
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
@@ -783,7 +793,8 @@ def _collapse_outliner_view():
             if region is None:
                 continue
             with bpy.context.temp_override(window=window, area=area, region=region):
-                bpy.ops.outliner.collapse_all()
+                for _ in range(20):
+                    bpy.ops.outliner.show_one_level(open=False)
             return True
     return False
 
@@ -862,6 +873,29 @@ def _build_sphere_mesh(
             lat = math.degrees(math.asin(z_ratio))
             lon = math.degrees(math.atan2(coord.y, coord.x))
             uv_data[i].uv = _to_uv(lat, lon)
+
+        # atan2-based longitude has a discontinuity exactly at +-180 degrees
+        # (the antimeridian) - computed per-loop/per-vertex with no
+        # awareness of which face a loop belongs to, so a face straddling
+        # that seam (two geometrically adjacent vertices landing on
+        # opposite sides of it) gets some loops at u~0 and others at u~1,
+        # stretching the texture across the whole image width for that
+        # face - a real, visible zigzag along the seam. Same root cause can
+        # also hit the pole-cap triangles, where atan2(~0, ~0) is only
+        # weakly defined and can land far from its neighbors' longitudes.
+        # Fixed per-FACE (not per-vertex - a shared vertex needs different
+        # UV values depending on which face is asking, which is exactly why
+        # UVs live on loops, not vertices): any polygon whose loops span
+        # more than half the UV width gets its "low" loops pushed past 1.0,
+        # staying geometrically continuous with the "high" side instead of
+        # wrapping.
+        for polygon in mesh.polygons:
+            us = [uv_data[i].uv[0] for i in polygon.loop_indices]
+            if max(us) - min(us) > 0.5:
+                for i in polygon.loop_indices:
+                    u, v = uv_data[i].uv
+                    if u < 0.5:
+                        uv_data[i].uv = (u + 1.0, v)
 
     if not add_surface:
         mesh.polygons.foreach_set("hide", [True] * len(mesh.polygons))
@@ -1951,23 +1985,31 @@ def _convert_raster_to_png(source_path, max_size=4096):
     return target_path
 
 
-def _visible_socket_by_name(sockets, name):
-    """Like _socket_by_name, but skips hidden sockets first.
+def _socket_by_name_and_type(sockets, name, socket_type):
+    """Like _socket_by_name, but also requires an exact socket.type match.
 
     Needed for the generic "Mix" shader node: it carries Float/Vector/Color
     variants of "A"/"B"/"Factor"/"Result" simultaneously, all sharing the
-    same display name, with only the variant matching the node's data_type
-    left un-hidden. Plain name lookup is ambiguous there; this isn't,
-    unless every match happens to be hidden, in which case it falls back to
-    the plain lookup rather than returning nothing.
+    same display name - normally distinguished by only the variant matching
+    the node's data_type being left un-hidden (.hide == False). That's what
+    an earlier version of this helper matched on, but it's not reliable: a
+    real bug on Blender 5.3 showed the wrong (Float) "B" socket getting
+    matched immediately after setting cloud_mix.data_type = "RGBA" in the
+    same script run - the .hide flags apparently hadn't been refreshed to
+    reflect the new data_type yet at that point, an update-timing dependency
+    this code shouldn't need to reason about at all. Filtering by the
+    socket's actual type instead sidesteps that entirely - it doesn't matter
+    whether Blender has gotten around to updating .hide yet, since RGBA vs
+    VALUE vs VECTOR is intrinsic to the socket itself, not a UI-state flag.
     """
     for socket in sockets:
-        if socket.name == name and not socket.hide:
+        if socket.name == name and socket.type == socket_type:
             return socket
-    return _socket_by_name(sockets, name)
+    return None
 
 
 def _ensure_texture_material(
+    context,
     material_name,
     image_path,
     clouds_image_path=None,
@@ -2059,10 +2101,10 @@ def _ensure_texture_material(
         cloud_mix = nodes.new("ShaderNodeMix")
         cloud_mix.data_type = "RGBA"
         cloud_mix.location = (100, -140)
-        mix_fac = _visible_socket_by_name(cloud_mix.inputs, "Factor")
-        mix_a = _visible_socket_by_name(cloud_mix.inputs, "A")
-        mix_b = _visible_socket_by_name(cloud_mix.inputs, "B")
-        mix_result = _visible_socket_by_name(cloud_mix.outputs, "Result")
+        mix_fac = _socket_by_name_and_type(cloud_mix.inputs, "Factor", "VALUE")
+        mix_a = _socket_by_name_and_type(cloud_mix.inputs, "A", "RGBA")
+        mix_b = _socket_by_name_and_type(cloud_mix.inputs, "B", "RGBA")
+        mix_result = _socket_by_name_and_type(cloud_mix.outputs, "Result", "RGBA")
         if mix_b is not None:
             mix_b.default_value = (0.92, 0.92, 0.94, 1.0)
         if cloud_factor_out is not None and mix_fac is not None:
@@ -2090,6 +2132,7 @@ def _apply_texture_to_reference_globe(
 ):
     globe = _ensure_reference_globe(context, settings)
     material = _ensure_texture_material(
+        context,
         "GeoReferenceGlobeMaterial",
         image_path,
         clouds_image_path=clouds_image_path,
