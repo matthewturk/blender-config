@@ -9,6 +9,7 @@ from . import ppm1d_nodebpy
 from . import data_visualization_menu
 from . import constant_mass_emission_generator
 from . import country_pair_batch_emitter
+from . import viewport_switch
 import bpy
 
 # Define the Blender addon/script metadata block
@@ -37,6 +38,7 @@ def register():
     data_visualization_menu.register()
     constant_mass_emission_generator.register()
     country_pair_batch_emitter.register()
+    viewport_switch.register()
     bpy.app.timers.register(ppm1d_nodebpy.build_ppm_tree, first_interval=3.0)
 
 
@@ -52,6 +54,7 @@ def unregister():
     constant_mass_emission_generator.unregister()
     country_pair_batch_emitter.unregister()
     data_visualization_menu.unregister()
+    viewport_switch.unregister()
 
 
 if __name__ == "__main__":
