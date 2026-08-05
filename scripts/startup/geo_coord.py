@@ -174,6 +174,26 @@ def project_point(
 #  Blender PropertyGroup
 # ---------------------------------------------------------------------------
 
+# Must match _GLOBE_OVERLAY_ROOT_NAME in country_wireframes.py. Not imported
+# from there to avoid a circular import (that module imports this one).
+_GLOBE_OVERLAY_ROOT_NAME = "GeoOverlayRoot"
+
+
+def _on_overlay_offset_updated(self, context):
+    """Push the slider value live onto the overlay-root empty's scale, so
+    Overlay Offset keeps working as a real-time control even though the
+    offset is no longer baked into wireframe vertex positions at build
+    time (see _ensure_globe_overlay_root_empty in country_wireframes.py).
+    A no-op before that empty exists - it just becomes the seed scale the
+    next time one is created.
+    """
+    overlay_root = bpy.data.objects.get(_GLOBE_OVERLAY_ROOT_NAME)
+    if overlay_root is None or overlay_root.type != "EMPTY":
+        return
+    s = 1.0 + self.overlay_offset
+    overlay_root.scale = (s, s, s)
+
+
 class GeoCoordSettings(bpy.types.PropertyGroup):
     coordinate_space: EnumProperty(
         name="Space",
@@ -224,10 +244,16 @@ class GeoCoordSettings(bpy.types.PropertyGroup):
     )
     overlay_offset: FloatProperty(
         name="Overlay Offset",
-        description="Push overlays above the reference globe surface",
+        description=(
+            "Push overlays above the reference globe surface, as a "
+            "fraction of globe radius. Live - drives GeoOverlayRoot's "
+            "scale directly, so it keeps working after the wireframes "
+            "have already been created"
+        ),
         default=0.001,
         min=0.0,
         max=0.1,
+        update=_on_overlay_offset_updated,
     )
 
 

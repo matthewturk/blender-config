@@ -63,27 +63,49 @@ def _tokenize_values(raw_text):
     return [token.strip() for token in normalized.split(separators[0]) if token.strip()]
 
 
-def _load_world_dataset(gpd):
-    # geopandas < 1.0 ships naturalearth_lowres; newer versions removed it.
-    try:
-        return gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
-    except Exception:
-        pass
-
-    # Fallback: read countries directly from Natural Earth.
-    url = (
+# Natural Earth ships admin-0 country boundaries at three fixed
+# generalization scales. 110m is the coarsest (whole-globe views); 10m is
+# the finest and the closest coastline match to photographic imagery like
+# Blue Marble, at the cost of a much larger download and vertex count.
+_NE_ADMIN0_COUNTRIES_URLS = {
+    "110M": (
         "https://naturalearth.s3.amazonaws.com/"
         "110m_cultural/ne_110m_admin_0_countries.zip"
-    )
+    ),
+    "50M": (
+        "https://naturalearth.s3.amazonaws.com/"
+        "50m_cultural/ne_50m_admin_0_countries.zip"
+    ),
+    "10M": (
+        "https://naturalearth.s3.amazonaws.com/"
+        "10m_cultural/ne_10m_admin_0_countries.zip"
+    ),
+}
+
+
+def _load_world_dataset(gpd, scale="110M"):
+    scale = str(scale).upper()
+    if scale not in _NE_ADMIN0_COUNTRIES_URLS:
+        scale = "110M"
+
+    # geopandas < 1.0 ships a bundled naturalearth_lowres dataset, but only
+    # at 110m - there's no bundled 50m/10m, so this shortcut only applies
+    # there; other scales always go through the URL fetch below.
+    if scale == "110M":
+        try:
+            return gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
+        except Exception:
+            pass
+
+    url = _NE_ADMIN0_COUNTRIES_URLS[scale]
     try:
         return gpd.read_file(url)
     except Exception as exc:
         raise RuntimeError(
             "Could not load world boundaries from geopandas built-ins or "
-            "Natural Earth URL. If you are offline, use geopandas with "
-            "bundled "
-            "datasets or pre-download the Natural Earth countries ZIP. "
-            f"Last error: {exc}"
+            f"the Natural Earth {scale} URL. If you are offline, use "
+            "geopandas with bundled datasets or pre-download the Natural "
+            f"Earth countries ZIP. Last error: {exc}"
         ) from exc
 
 
@@ -152,7 +174,7 @@ def _normalize_world_columns(gpd, world):
     return normalized
 
 
-def _load_geo_data():
+def _load_geo_data(scale="110M"):
     try:
         import geopandas as gpd
     except Exception as exc:
@@ -163,7 +185,7 @@ def _load_geo_data():
     except Exception as exc:
         raise RuntimeError(f"Could not import geonamescache: {exc}") from exc
 
-    world = _load_world_dataset(gpd)
+    world = _load_world_dataset(gpd, scale)
     world = _normalize_world_columns(gpd, world)
     world = world.dropna(subset=["geometry"])
 
@@ -816,6 +838,84 @@ def _get_child_collection(parent, name):
     return None
 
 
+_GLOBE_ROOT_NAME = "GeoGlobeRoot"
+
+
+def _ensure_globe_root_empty(context):
+    """Get or create the empty that every geo-referenced object is parented
+    to, so rotating/scaling this one empty carries the reference globe and
+    all country/continent/GeoJSON wireframes with it.
+    """
+    root_empty = bpy.data.objects.get(_GLOBE_ROOT_NAME)
+    if root_empty is None or root_empty.type != "EMPTY":
+        root_empty = bpy.data.objects.new(_GLOBE_ROOT_NAME, None)
+        root_empty.empty_display_type = "PLAIN_AXES"
+        coord_settings = getattr(context.scene, "geo_coord_settings", None)
+        root_empty.empty_display_size = (
+            coord_settings.globe_radius if coord_settings is not None else 1.0
+        )
+
+    root = _get_or_create_collection(context.scene.collection, "Geo Wireframes")
+    if root_empty.name not in root.objects:
+        root.objects.link(root_empty)
+
+    return root_empty
+
+
+def _parent_to_globe_root(obj, root_empty):
+    """Parent obj to root_empty with an identity parent-inverse (not "keep
+    transform"). Every geo object's local coordinates are already baked in
+    the same unrotated globe frame (see _line_coords_to_xyz), so leaving the
+    parent-inverse as identity means root_empty's current rotation/scale
+    applies uniformly to every object - whether it was parented before or
+    after that rotation was set.
+    """
+    if obj is None or root_empty is None or obj is root_empty:
+        return
+    if obj.parent is not root_empty:
+        obj.parent = root_empty
+    obj.matrix_parent_inverse.identity()
+
+
+_GLOBE_OVERLAY_ROOT_NAME = "GeoOverlayRoot"
+
+
+def _ensure_globe_overlay_root_empty(context):
+    """Get or create the empty that every *overlay* object (country/
+    continent wireframes, GeoJSON imports, anchor points - everything
+    except the reference globe mesh itself) is parented to, as a child of
+    the globe root empty.
+
+    All overlay geometry is now built at plain globe_radius (no offset
+    baked into vertex positions). The radial push-out above the reference
+    globe surface - previously a build-time-only "Overlay Offset" baked
+    into every vertex - is instead this empty's own uniform scale, so it
+    stays adjustable after creation: grab GeoOverlayRoot in the Outliner
+    and change its Scale, or use the Overlay Offset slider, which drives
+    this same scale via an update callback (see geo_coord.py) instead of
+    only taking effect on the next regenerate.
+    """
+    overlay_root = bpy.data.objects.get(_GLOBE_OVERLAY_ROOT_NAME)
+    is_new = overlay_root is None or overlay_root.type != "EMPTY"
+    if is_new:
+        overlay_root = bpy.data.objects.new(_GLOBE_OVERLAY_ROOT_NAME, None)
+        overlay_root.empty_display_type = "PLAIN_AXES"
+        coord_settings = getattr(context.scene, "geo_coord_settings", None)
+        radius = coord_settings.globe_radius if coord_settings is not None else 1.0
+        offset = coord_settings.overlay_offset if coord_settings is not None else 0.0
+        overlay_root.empty_display_size = radius * 0.05
+        overlay_root.scale = (1.0 + offset, 1.0 + offset, 1.0 + offset)
+
+    globe_root = _ensure_globe_root_empty(context)
+    _parent_to_globe_root(overlay_root, globe_root)
+
+    root = _get_or_create_collection(context.scene.collection, "Geo Wireframes")
+    if overlay_root.name not in root.objects:
+        root.objects.link(overlay_root)
+
+    return overlay_root
+
+
 def _unique_collection_name(base_name):
     if bpy.data.collections.get(base_name) is None:
         return base_name
@@ -865,6 +965,18 @@ def _build_sphere_mesh(
         uv_data = uv_layer.data
         loops = mesh.loops
         vertices = mesh.vertices
+
+        # The two pole vertices sit exactly on the Z axis (x == y == 0.0,
+        # not just close to it - create_uvsphere puts them there exactly),
+        # so atan2(0, 0) is where every polar-cap triangle's apex loop
+        # lands - always the SAME longitude (0 degrees / u=0.5), regardless
+        # of which face is asking. That's unlike every other seam case
+        # here, which is a discontinuity a face can straddle; this is a
+        # constant that's simply wrong for most faces around the pole.
+        pole_vertex_indices = {
+            v.index for v in vertices if abs(v.co.x) < 1e-9 and abs(v.co.y) < 1e-9
+        }
+
         for i, loop in enumerate(loops):
             coord = vertices[loop.vertex_index].co
             length = max(coord.length, 1e-8)
@@ -880,22 +992,48 @@ def _build_sphere_mesh(
         # that seam (two geometrically adjacent vertices landing on
         # opposite sides of it) gets some loops at u~0 and others at u~1,
         # stretching the texture across the whole image width for that
-        # face - a real, visible zigzag along the seam. Same root cause can
-        # also hit the pole-cap triangles, where atan2(~0, ~0) is only
-        # weakly defined and can land far from its neighbors' longitudes.
-        # Fixed per-FACE (not per-vertex - a shared vertex needs different
-        # UV values depending on which face is asking, which is exactly why
-        # UVs live on loops, not vertices): any polygon whose loops span
-        # more than half the UV width gets its "low" loops pushed past 1.0,
-        # staying geometrically continuous with the "high" side instead of
-        # wrapping.
+        # face - a real, visible zigzag along the seam. Fixed per-FACE (not
+        # per-vertex - a shared vertex needs different UV values depending
+        # on which face is asking, which is exactly why UVs live on loops,
+        # not vertices): any polygon whose loops span more than half the UV
+        # width gets its "low" loops pushed past 1.0, staying geometrically
+        # continuous with the "high" side instead of wrapping. Pole loops
+        # are excluded here - their constant u=0.5 isn't a real seam
+        # crossing, and including it would either mask a real wraparound
+        # face or trigger a shift the pole loop doesn't need.
         for polygon in mesh.polygons:
-            us = [uv_data[i].uv[0] for i in polygon.loop_indices]
-            if max(us) - min(us) > 0.5:
-                for i in polygon.loop_indices:
-                    u, v = uv_data[i].uv
+            non_pole_loops = [
+                li
+                for li in polygon.loop_indices
+                if loops[li].vertex_index not in pole_vertex_indices
+            ]
+            us = [uv_data[li].uv[0] for li in non_pole_loops]
+            if len(us) >= 2 and max(us) - min(us) > 0.5:
+                for li in non_pole_loops:
+                    u, v = uv_data[li].uv
                     if u < 0.5:
-                        uv_data[i].uv = (u + 1.0, v)
+                        uv_data[li].uv = (u + 1.0, v)
+
+        # Now that every non-pole loop's u is seam-corrected, snap each
+        # polar-cap triangle's apex loop to match the longitude of its own
+        # base edge instead of the constant atan2(0, 0) value - this is
+        # what was pulling every polar triangle's texture toward one fixed
+        # meridian and produced the pinwheel crease down to the pole.
+        for polygon in mesh.polygons:
+            pole_loops = [
+                li
+                for li in polygon.loop_indices
+                if loops[li].vertex_index in pole_vertex_indices
+            ]
+            if not pole_loops:
+                continue
+            other_loops = [li for li in polygon.loop_indices if li not in pole_loops]
+            if not other_loops:
+                continue
+            avg_u = sum(uv_data[li].uv[0] for li in other_loops) / len(other_loops)
+            for li in pole_loops:
+                _, v = uv_data[li].uv
+                uv_data[li].uv = (avg_u, v)
 
     if not add_surface:
         mesh.polygons.foreach_set("hide", [True] * len(mesh.polygons))
@@ -1185,6 +1323,7 @@ def _create_boundary_wire_object_from_lines(
     spherical_tolerance_deg=0.0,
     coord_settings=None,
     latlon_bounds=None,
+    globe_root=None,
 ):
     vertices = []
     edges = []
@@ -1230,6 +1369,7 @@ def _create_boundary_wire_object_from_lines(
     obj["geo_iso3"] = iso3
     obj["geo_m49"] = m49
     collection.objects.link(obj)
+    _parent_to_globe_root(obj, globe_root)
     return obj
 
 
@@ -1249,6 +1389,7 @@ def _create_curve_outline_object_from_lines(
     spline_type="NURBS",
     coord_settings=None,
     latlon_bounds=None,
+    globe_root=None,
 ):
     curve_data = bpy.data.curves.new(f"{obj_name}_Curve", type="CURVE")
     curve_data.dimensions = "3D"
@@ -1310,6 +1451,7 @@ def _create_curve_outline_object_from_lines(
     obj["geo_iso3"] = iso3
     obj["geo_m49"] = m49
     collection.objects.link(obj)
+    _parent_to_globe_root(obj, globe_root)
     return obj
 
 
@@ -1332,6 +1474,7 @@ def _create_geojson_point_object(
     mode,
     sphere_mesh,
     geo_name,
+    globe_root=None,
 ):
     if mode == "EMPTY":
         obj = bpy.data.objects.new(obj_name, None)
@@ -1348,6 +1491,7 @@ def _create_geojson_point_object(
     obj["geo_iso2"] = ""
     obj["geo_iso3"] = ""
     collection.objects.link(obj)
+    _parent_to_globe_root(obj, globe_root)
     return obj
 
 
@@ -1378,7 +1522,8 @@ def _import_geojson_feature_payload(
             imports_coll = _get_or_create_collection(root, "GeoJSON Imports")
 
     coord_settings = context.scene.geo_coord_settings
-    overlay_radius = coord_settings.globe_radius * (1.0 + coord_settings.overlay_offset)
+    overlay_root = _ensure_globe_overlay_root_empty(context)
+    overlay_radius = coord_settings.globe_radius
     line_created = 0
     point_created = 0
     latlon_bounds = _bounds_from_geojson_payload(payload) if coord_settings.flat_fit_to_bbox else None
@@ -1459,6 +1604,7 @@ def _import_geojson_feature_payload(
                     spline_type=settings.geojson_curve_spline_type,
                     coord_settings=coord_settings,
                     latlon_bounds=latlon_bounds,
+                    globe_root=overlay_root,
                 )
             else:
                 line_obj = _create_boundary_wire_object_from_lines(
@@ -1475,6 +1621,7 @@ def _import_geojson_feature_payload(
                     spherical_tolerance_deg=(settings.geojson_spherical_tolerance_deg),
                     coord_settings=coord_settings,
                     latlon_bounds=latlon_bounds,
+                    globe_root=overlay_root,
                 )
 
             if line_obj is not None:
@@ -1510,6 +1657,7 @@ def _import_geojson_feature_payload(
                 mode=settings.geojson_point_mode,
                 sphere_mesh=sphere_mesh,
                 geo_name=feature_name,
+                globe_root=overlay_root,
             )
             point_obj["geo_source_file"] = source_label
             point_obj["geo_feature_index"] = index
@@ -1847,6 +1995,7 @@ def _create_boundary_wire_object(
     spherical_tolerance_deg=0.0,
     coord_settings=None,
     latlon_bounds=None,
+    globe_root=None,
 ):
     return _create_boundary_wire_object_from_lines(
         collection=collection,
@@ -1863,10 +2012,11 @@ def _create_boundary_wire_object(
         spherical_tolerance_deg=spherical_tolerance_deg,
         coord_settings=coord_settings,
         latlon_bounds=latlon_bounds,
+        globe_root=globe_root,
     )
 
 
-def _create_reference_globe(collection, radius, resolution):
+def _create_reference_globe(collection, radius, resolution, globe_root=None):
     mesh = _build_sphere_mesh(
         "GeoReferenceGlobeMesh",
         radius,
@@ -1884,6 +2034,7 @@ def _create_reference_globe(collection, radius, resolution):
     for poly in mesh.polygons:
         poly.use_smooth = True
     collection.objects.link(obj)
+    _parent_to_globe_root(obj, globe_root)
     return obj
 
 
@@ -1898,8 +2049,11 @@ def _find_reference_globe_object():
 
 
 def _ensure_reference_globe(context, settings):
+    globe_root = _ensure_globe_root_empty(context)
+
     existing = _find_reference_globe_object()
     if existing is not None:
+        _parent_to_globe_root(existing, globe_root)
         return existing
 
     coord_settings = context.scene.geo_coord_settings
@@ -1909,6 +2063,7 @@ def _ensure_reference_globe(context, settings):
         collection=reference_coll,
         radius=coord_settings.globe_radius,
         resolution=settings.resolution,
+        globe_root=globe_root,
     )
 
 
@@ -2186,6 +2341,7 @@ def _make_linked_instance(
     iso2,
     iso3,
     m49="",
+    globe_root=None,
 ):
     obj = bpy.data.objects.new(name, source_mesh)
     obj.location = location
@@ -2197,6 +2353,7 @@ def _make_linked_instance(
     obj["geo_iso3"] = iso3
     obj["geo_m49"] = m49
     collection.objects.link(obj)
+    _parent_to_globe_root(obj, globe_root)
     return obj
 
 
@@ -2257,7 +2414,7 @@ def _write_anchor_attributes(anchor_obj, items):
         attr_uv.data[i].vector = item["uv"]
 
 
-def _create_anchor_object(context, name, points, items, collection):
+def _create_anchor_object(context, name, points, items, collection, globe_root=None):
     mesh = bpy.data.meshes.new(f"{name}_Mesh")
     mesh.from_pydata(points, [], [])
     mesh.update()
@@ -2270,6 +2427,7 @@ def _create_anchor_object(context, name, points, items, collection):
         "lat/lon coordinates in attributes."
     )
     collection.objects.link(obj)
+    _parent_to_globe_root(obj, globe_root)
     _write_anchor_attributes(obj, items)
     return obj
 
@@ -2487,7 +2645,9 @@ class OBJECT_OT_refresh_geo_country_list(bpy.types.Operator):
     def execute(self, context):
         settings = context.scene.country_wireframe_settings
         try:
-            world, _country_lookup, _continents_lookup = _load_geo_data()
+            world, _country_lookup, _continents_lookup = _load_geo_data(
+                scale=settings.world_dataset_scale,
+            )
         except RuntimeError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
@@ -2557,6 +2717,35 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
             "Leave empty to include all continents."
         ),
         default="",
+    )
+    world_dataset_scale: bpy.props.EnumProperty(
+        name="Coastline Detail",
+        description=(
+            "Natural Earth admin-0 boundary dataset to load countries/"
+            "continents from. Affects both the country list (Refresh) and "
+            "Create Country Wireframes - re-run Refresh after changing it"
+        ),
+        items=(
+            (
+                "110M",
+                "Coarse (1:110m)",
+                "Fastest, smallest; heavily simplified coastlines meant for "
+                "whole-globe views. Will visibly cut across bays, fjords, "
+                "and small islands compared to Blue Marble imagery.",
+            ),
+            (
+                "50M",
+                "Medium (1:50m)",
+                "Moderate detail and download/vertex count.",
+            ),
+            (
+                "10M",
+                "Fine (1:10m)",
+                "Closest coastline match to Blue Marble imagery; largest "
+                "download and vertex count, slower to generate.",
+            ),
+        ),
+        default="110M",
     )
     resolution: bpy.props.IntProperty(
         name="Resolution",
@@ -3246,7 +3435,9 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
             return {"CANCELLED"}
 
         try:
-            _world, country_lookup, continents_lookup = _load_geo_data()
+            _world, country_lookup, continents_lookup = _load_geo_data(
+                scale=settings.world_dataset_scale,
+            )
         except RuntimeError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
@@ -3301,14 +3492,18 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                 for obj in list(coll.objects):
                     bpy.data.objects.remove(obj, do_unlink=True)
 
+        globe_root = _ensure_globe_root_empty(context)
+        overlay_root = _ensure_globe_overlay_root_empty(context)
+
         if settings.create_reference_globe:
             _create_reference_globe(
                 collection=reference_coll,
                 radius=coord_settings.globe_radius,
                 resolution=settings.resolution,
+                globe_root=globe_root,
             )
 
-        overlay_radius = coord_settings.globe_radius * (1.0 + coord_settings.overlay_offset)
+        overlay_radius = coord_settings.globe_radius
 
         country_proto = None
         continent_proto = None
@@ -3383,6 +3578,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         m49=m49,
                         coord_settings=coord_settings,
                         latlon_bounds=latlon_bounds,
+                        globe_root=overlay_root,
                     )
                     if created_obj is None:
                         missing.append(token)
@@ -3399,6 +3595,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         iso2=iso2,
                         iso3=iso3,
                         m49=m49,
+                        globe_root=overlay_root,
                     )
 
                 anchor_points.append(location)
@@ -3442,6 +3639,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         iso3="",
                         coord_settings=coord_settings,
                         latlon_bounds=latlon_bounds,
+                        globe_root=overlay_root,
                     )
                     if created_obj is None:
                         continue
@@ -3456,6 +3654,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                         continent_name=continent_name,
                         iso2="",
                         iso3="",
+                        globe_root=overlay_root,
                     )
 
                 anchor_points.append(location)
@@ -3479,6 +3678,7 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                 anchor_points,
                 anchor_items,
                 anchors_coll,
+                globe_root=overlay_root,
             )
 
         if created == 0:
@@ -3582,6 +3782,7 @@ class VIEW3D_PT_country_wireframes_build(bpy.types.Panel):
         row.prop(settings, "continents_enabled", toggle=True)
 
         layout.prop(settings, "generation_mode")
+        layout.prop(settings, "world_dataset_scale")
 
         row = layout.row()
         row.template_list(
