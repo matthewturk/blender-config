@@ -165,12 +165,18 @@ def load_and_sync_chezmoi(dummy=None):
     # hardcoded absolute path, so this repo can live anywhere - see the
     # matching comment in scripts/startup/flat_gis_importer.py's
     # _ensure_venv(), which had the same hardcoded-path issue.
+    # realpath, not plain __file__: this module is only ever actually
+    # loaded via scripts/startup/_chezmoi_sync_shim.py, whose own fix
+    # (2026-09-18) already passes a resolved, non-symlinked path into
+    # spec_from_file_location() here - so __file__ should already be real
+    # by the time this line runs. realpath() is applied anyway, defensively,
+    # in case this module is ever loaded some other way in the future.
     # config_path is intentionally NOT relative to the repo - the actual
     # rendered preferences file lives outside it entirely, at a fixed
     # location under the user's Blender config dir (chezmoi renders
     # config/config.json.tmpl to there, it's never read from inside this
     # repo directly).
-    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    project_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
     config_path = os.path.expanduser("~/.config/blender/config.json")
 
     # -------------------------------------------------------------------------

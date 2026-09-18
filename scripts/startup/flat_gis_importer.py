@@ -22,7 +22,22 @@ def _ensure_venv():
     # exists on the same machine, that hardcoded candidate would silently
     # win and pull in a DIFFERENT install's dependencies instead of this
     # one's own - confirmed happening during testing.)
-    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    #
+    # MUST use os.path.realpath(__file__), not plain __file__: this file
+    # lives inside scripts/startup/, which is exactly the directory
+    # chezmoi's real-machine hook symlinks into Blender's own startup
+    # directory as a folder literally named "chezmoi" - so when Blender
+    # loads this module through that real symlink (the actual production
+    # scenario, not just a plain local checkout), __file__ reflects the
+    # traversed symlink path, NOT this repo's real location, and climbing
+    # ".." twice from the unresolved path lands outside the real repo
+    # entirely. This exact bug (same root cause, different file) was
+    # confirmed via a FileNotFoundError on a real machine and reproduced
+    # here - see the matching fix/comment in _chezmoi_sync_shim.py for the
+    # minimal repro. realpath() resolves the symlink first.
+    project_dir = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..")
+    )
 
     lib_dir = os.path.join(project_dir, ".venv", "lib")
     if os.path.exists(lib_dir):
@@ -908,7 +923,15 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
     
     if settings.import_satellite:
         # Save path in project assets folder
-        project_dir = os.path.dirname(os.path.abspath(__file__))
+        # realpath (not plain abspath) - same symlink-traversal issue as
+        # _ensure_venv() above: this file loads through chezmoi's real
+        # "chezmoi" symlink in production, and an unresolved __file__
+        # there doesn't point at this repo's actual location. Pre-existing
+        # bug (not new this session) - fixed 2026-09-18 alongside the
+        # other two instances of this same pattern; previously always fell
+        # through to the ~/blender-assets fallback below on any real
+        # machine instead of ever finding this branch's intended path.
+        project_dir = os.path.dirname(os.path.realpath(__file__))
         assets_dir = os.path.abspath(os.path.join(project_dir, "..", "..", "..", "blender-assets"))
         if not os.path.exists(assets_dir):
             assets_dir = os.path.expanduser("~/blender-assets")
