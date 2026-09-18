@@ -22,4 +22,6 @@ dependencies = [
     "scipy>=1.18.0",
     "cmyt>=2.0.2",
     "bpy>=5.2.2",
+    "usd-core>=26.8",
+    "polars[rtcompat]>=1.44.2",
 ]

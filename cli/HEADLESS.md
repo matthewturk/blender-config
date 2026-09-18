@@ -82,7 +82,7 @@ the real-Blender-bundled-Python scenario.
 
 **Everything else in `scripts/startup/` beyond the GeoJSON import path is unverified under
 headless `bpy`.** The fixes and tests above cover exactly the path `cli/geojson_export.py`
-exercises (GeoJSON import, custom properties, UV-sphere marker creation, STL/Alembic export,
+exercises (GeoJSON import, custom properties, UV-sphere marker creation, STL/Alembic/FBX/USD export,
 round-tripped back into bpy to confirm real geometry). Other features (OSM import, Blue
 Marble imagery, the constant-mass-emission generator, node_scripts/, etc.) haven't been run
 under headless `bpy` at all yet - treat them as unverified until someone actually exercises
