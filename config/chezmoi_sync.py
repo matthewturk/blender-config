@@ -81,20 +81,37 @@ def _apply_property_map(target, values, label):
     return applied
 
 
-def _valid_compute_device_types(cprefs):
-    """Return the set of valid Cycles compute_device_type enum identifiers."""
-    fallback = {"NONE", "CUDA", "OPTIX", "HIP", "METAL", "ONEAPI"}
-    try:
-        return set(cprefs.bl_rna.properties["compute_device_type"].enum_items.keys())
-    except Exception as e:
-        print(
-            f"[Chezmoi/Preferences Warning] Could not introspect compute_device_type enum ({e}); using fallback list."
-        )
-        return fallback
-
-
 def _apply_render_device_type(cprefs, device_type):
-    """Validate and apply the Cycles compute device type defensively."""
+    """Validate and apply the Cycles compute device type defensively.
+
+    Does NOT pre-check the value against cprefs.bl_rna.properties[
+    "compute_device_type"].enum_items - that's a static/class-level RNA
+    introspection path, and compute_device_type is a DYNAMIC enum (its
+    valid values are computed by a callback based on which compute
+    backends - CUDA/OPTIX/HIP/etc. - are actually detected). Confirmed
+    directly: that introspection path returns an EMPTY list in a
+    background/headless Blender session (both under the standalone pip
+    `bpy` package and under a real Blender install's `--background` mode
+    - this isn't a pip-bpy-specific quirk, it's a background-mode-specific
+    one), even with real GPUs present and even after calling
+    cprefs.get_devices() first - while actually ASSIGNING a real value
+    like "OPTIX" directly to cprefs.compute_device_type works completely
+    correctly in that same session (it evaluates the real dynamic
+    callback, not the static introspection path). Pre-validating against
+    that empty list was a false negative: it rejected genuinely valid
+    values as "invalid" purely because the validation method itself
+    doesn't work in headless mode, not because the value was wrong -
+    this is exactly why "OPTIX" (this repo's own real config value) kept
+    getting reported as invalid with "(expected one of [])" in headless/
+    background runs.
+
+    Fixed 2026-09 by just trying the real assignment and catching
+    whatever Blender's own runtime validation raises - that path DOES
+    correctly evaluate the dynamic callback in every mode (interactive
+    and headless alike), and its own exception message already reports
+    the real valid-values list for whatever backends are actually
+    available on this machine.
+    """
     if not isinstance(device_type, str):
         print(
             f"[Chezmoi/Preferences Warning] render_device_type must be a string, got: {device_type!r}; skipping."
@@ -102,14 +119,6 @@ def _apply_render_device_type(cprefs, device_type):
         return
 
     normalized = device_type.strip().upper()
-    valid_types = _valid_compute_device_types(cprefs)
-
-    if normalized not in valid_types:
-        print(
-            f"[Chezmoi/Preferences Warning] Invalid render_device_type '{device_type}' "
-            f"(expected one of {sorted(valid_types)}); skipping."
-        )
-        return
 
     try:
         cprefs.compute_device_type = normalized
@@ -118,6 +127,13 @@ def _apply_render_device_type(cprefs, device_type):
             for device in cprefs.devices:
                 device.use = True
         print(f"[Chezmoi/Preferences] Applied render device type: {normalized}")
+    except TypeError as e:
+        # Blender's own enum-assignment error already reports the real,
+        # dynamically-evaluated valid-values list for this machine.
+        print(
+            f"[Chezmoi/Preferences Warning] Invalid render_device_type "
+            f"'{device_type}': {e}; skipping."
+        )
     except Exception as e:
         print(
             f"[Chezmoi/Preferences Warning] Failed to set render_device_type '{normalized}': {e}"
