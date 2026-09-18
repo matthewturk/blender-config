@@ -22,31 +22,28 @@ PARAMS = {
 }
 
 
-def _natural_sort_key(name):
-    """Case-insensitive, natural (numeric-aware) sort key approximating
-    Blender's own BLI_strcasecmp_natural - what Collection Info's "sort
-    alphabetically" (Separate Children checked) actually uses, NOT Python's
-    plain sorted()/str comparison. Plain sorted() is case-SENSITIVE ordinal
-    comparison, which puts every capitalized name before every lowercase one
-    (in ASCII, 'Z' < 'a') - a real, confirmed bug: mixed-case object names
-    desynchronized this script's row order from Collection Info's actual
-    children order starting at the first lowercase name, silently pointing
-    indices at the wrong object from then on.
-
-    Each chunk is tagged (0, text) or (1, number) so chunks never compare
-    across types at the same position - avoiding any TypeError from
-    comparing an int to a str.
+def _load_sibling(module_name):
+    """Load a module from scripts/startup/ (one directory up from
+    node_scripts/) by file path - node_scripts/ files are loaded
+    standalone by dynamic_script_runner.py (no parent package context),
+    so a package-relative import doesn't work here. Same pattern as
+    user_scripts/constant_mass_emission_times.py's _load_sibling.
     """
-    import re
-    return [
-        (1, int(chunk)) if chunk.isdigit() else (0, chunk.lower())
-        for chunk in re.split(r"(\d+)", name) if chunk
-    ]
+    import os
+    import importlib.util
+
+    path = os.path.join(os.path.dirname(__file__), "..", f"{module_name}.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_shared = _load_sibling("_collection_to_lists_shared")
 
 
 def build(tree, params):
     from nodebpy import geometry as g
-    import bpy
 
     collection = params.get("input_collection")
     if collection is None:
@@ -55,31 +52,12 @@ def build(tree, params):
 
     debug = params.get("debug", False)
 
-    # Sorted with _natural_sort_key - NOT collection.objects' own iteration
-    # order (link order, unrelated to name), and NOT plain sorted()/o.name
-    # either (case-sensitive, see _natural_sort_key's docstring for the real
-    # bug that caused). Geometry Nodes' Collection Info node (with Separate
-    # Children checked) always outputs its children in Blender's own
-    # case-insensitive natural sort order - documented, fixed behavior on
-    # that side, not something this script can change. If these lists are
-    # meant to be indexed with the same index Collection Info/Get List Item
-    # produces, they need the SAME order GN uses, or every index silently
-    # points at the wrong object.
-    ordered_objects = sorted(collection.objects, key=lambda o: _natural_sort_key(o.name))
-
-    # ── gather custom properties from every object ────────────────────
-    all_keys = set()
-    for obj in ordered_objects:
-        all_keys.update(obj.keys())
-
-    string_values = {k: [] for k in sorted(all_keys)}
-    for obj in ordered_objects:
-        for k in string_values:
-            string_values[k].append(str(obj.get(k, "")))
-        if debug:
-            print(f"[collection_to_lists] {obj.name}: " + ", ".join(
-                f"{k}={obj.get(k, '')!r}" for k in string_values
-            ))
+    # See _collection_to_lists_shared.gather_property_lists: objects are
+    # walked in Blender's own case-insensitive natural sort order (matching
+    # Collection Info's "Separate Children" output order, so indices stay
+    # aligned with it), and property keys come back sorted and with
+    # underscore-prefixed id-property metadata (e.g. "_RNA_UI") filtered out.
+    _ordered_objects, string_values = _shared.gather_property_lists(collection, debug=debug)
 
     if not string_values:
         tree.outputs.geometry("Output") >> tree.inputs.geometry("Geometry")

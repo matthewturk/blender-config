@@ -214,8 +214,14 @@ def execute(context, params):
         if not group_names:
             raise ValueError(f"No child groups found under '{curves_root}'")
 
+        # Simple periodic progress feedback - this scrape can run over many
+        # groups with no other output until the final summary print, so
+        # report every ~5% (or every group, if there are fewer than 20).
+        n_groups = len(group_names)
+        progress_step = max(1, n_groups // 20)
+
         curves = []
-        for name in group_names:
+        for i, name in enumerate(group_names):
             datasets = _gather_group_datasets(root[name])
             if datasets is None:
                 print(f"Skipping empty group '{name}'")
@@ -223,6 +229,8 @@ def execute(context, params):
             n_points = next(iter(datasets.values())).shape[0]
             group_attrs = _gather_group_attrs(root[name])
             curves.append((name, n_points, datasets, group_attrs))
+            if (i + 1) % progress_step == 0 or (i + 1) == n_groups:
+                print(f"Scraped {i + 1}/{n_groups} groups ({100 * (i + 1) / n_groups:.0f}%)")
 
         if not curves:
             raise ValueError(f"No groups with datasets found under '{curves_root}'")
@@ -233,15 +241,42 @@ def execute(context, params):
         )
 
         attr_names = sorted({key for _, _, datasets, _ in curves for key in datasets})
-        point_attrs = {
-            attr_name: np.concatenate(
-                [
-                    datasets.get(attr_name, np.full(n, np.nan, dtype=np.float32))
-                    for _, n, datasets, _ in curves
-                ]
+        point_attrs = {}
+        for attr_name in attr_names:
+            # The "real" dtype comes from whichever groups actually HAVE
+            # this dataset - not the filler used for groups that lack it.
+            # A group simply missing one attribute other groups have is a
+            # documented-normal case (see module docstring), and must not,
+            # by itself, decide this attribute's dtype for everyone.
+            real_dtype = next(
+                datasets[attr_name].dtype for _, _, datasets, _ in curves if attr_name in datasets
             )
-            for attr_name in attr_names
-        }
+            n_missing = sum(1 for _, _, datasets, _ in curves if attr_name not in datasets)
+
+            if n_missing and np.issubdtype(real_dtype, np.integer):
+                # Filling with NaN would silently upcast this whole
+                # attribute from integer to float for every curve, not
+                # just the groups actually missing it - surprising for a
+                # documented-as-normal "some groups don't have this
+                # attribute" case. Use an explicit, documented sentinel
+                # (0) instead, and say so.
+                print(
+                    f"Point attribute '{attr_name}' is integer-typed "
+                    f"({real_dtype}) but missing from {n_missing} of "
+                    f"{len(curves)} group(s) - filling those groups' points "
+                    f"with 0 rather than upcasting the whole attribute to "
+                    f"float+NaN"
+                )
+                fill = lambda n, dtype=real_dtype: np.zeros(n, dtype=dtype)
+            elif n_missing:
+                fill = lambda n: np.full(n, np.nan, dtype=np.float32)
+            else:
+                fill = None  # every group has this dataset; never called below
+
+            point_attrs[attr_name] = np.concatenate([
+                datasets[attr_name] if attr_name in datasets else fill(n)
+                for _, n, datasets, _ in curves
+            ])
         group_names_per_curve = np.array([name for name, _, _, _ in curves])
 
         # Each group's own HDF5 attributes (group.attrs) become CURVE-domain

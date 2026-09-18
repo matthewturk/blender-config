@@ -8,25 +8,30 @@ import urllib.parse
 from io import BytesIO
 
 import bpy
-import bmesh
+
+from . import _osm_safety_shared
 
 # Dynamically attach venv path matching active Python major.minor version
 def _ensure_venv():
-    # Try multiple options to resolve project dir
-    project_dirs = [
-        os.path.expanduser("~/.config/blender/blender-config"),
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    ]
-    
-    for p_dir in project_dirs:
-        lib_dir = os.path.join(p_dir, ".venv", "lib")
-        if os.path.exists(lib_dir):
-            for item in os.listdir(lib_dir):
-                if item.startswith("python"):
-                    site_pkgs = os.path.join(lib_dir, item, "site-packages")
-                    if os.path.exists(site_pkgs) and site_pkgs not in sys.path:
-                        sys.path.append(site_pkgs)
-                        print(f"[FlatGIS] Dynamically attached site-packages: {site_pkgs}")
+    # Resolve the project dir relative to this file's own location
+    # (scripts/startup/flat_gis_importer.py -> repo root is two levels up)
+    # rather than a hardcoded absolute path - this repo can live anywhere
+    # and this still finds its own venv. (Previously also tried a
+    # hardcoded ~/.config/blender/blender-config first - removed 2026-09:
+    # if this repo is ever checked out somewhere else, or a second copy
+    # exists on the same machine, that hardcoded candidate would silently
+    # win and pull in a DIFFERENT install's dependencies instead of this
+    # one's own - confirmed happening during testing.)
+    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+    lib_dir = os.path.join(project_dir, ".venv", "lib")
+    if os.path.exists(lib_dir):
+        for item in os.listdir(lib_dir):
+            if item.startswith("python"):
+                site_pkgs = os.path.join(lib_dir, item, "site-packages")
+                if os.path.exists(site_pkgs) and site_pkgs not in sys.path:
+                    sys.path.append(site_pkgs)
+                    print(f"[FlatGIS] Dynamically attached site-packages: {site_pkgs}")
 
 # Run ensure_venv immediately on module load
 _ensure_venv()
@@ -117,7 +122,11 @@ def download_and_stitch_satellite(min_lat, min_lon, max_lat, max_lon, zoom, outp
     tile_w = 256
     tile_h = 256
     stitched = Image.new('RGB', (num_x * tile_w, num_y * tile_h))
-    
+
+    total_tiles = num_x * num_y
+    print(f"[FlatGIS] Downloading {total_tiles} satellite tile(s) (zoom {zoom})...")
+    tiles_done = 0
+
     for ty_idx, y in enumerate(range(y_min, y_max + 1)):
         for tx_idx, x in enumerate(range(x_min, x_max + 1)):
             url = f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{zoom}/{y}/{x}"
@@ -132,12 +141,17 @@ def download_and_stitch_satellite(min_lat, min_lon, max_lat, max_lon, zoom, outp
                 placeholder = Image.new('RGB', (tile_w, tile_h), color=(120, 130, 120))
                 stitched.paste(placeholder, (tx_idx * tile_w, ty_idx * tile_h))
 
+            tiles_done += 1
+            if tiles_done % 10 == 0 or tiles_done == total_tiles:
+                print(f"[FlatGIS] Satellite tiles: {tiles_done}/{total_tiles} done.")
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     stitched.save(output_path)
-    
+    print(f"[FlatGIS] Satellite imagery stitched and saved to {output_path}")
+
     img_max_lat, img_min_lon = tile_to_latlon(x_min, y_min, zoom)
     img_min_lat, img_max_lon = tile_to_latlon(x_max + 1, y_max + 1, zoom)
-    
+
     return img_min_lat, img_min_lon, img_max_lat, img_max_lon
 
 
@@ -147,7 +161,10 @@ def fetch_elevations_open_elevation(coords_list):
     url = "https://api.open-elevation.com/api/v1/lookup"
     chunk_size = 400
     all_results = []
-    
+
+    total_chunks = max(1, (len(coords_list) + chunk_size - 1) // chunk_size)
+    print(f"[FlatGIS] Querying elevation API for {len(coords_list)} point(s) in {total_chunks} chunk(s)...")
+
     for i in range(0, len(coords_list), chunk_size):
         chunk = coords_list[i : i + chunk_size]
         payload = json.dumps({"locations": [{"latitude": lat, "longitude": lon} for lat, lon in chunk]})
@@ -161,10 +178,11 @@ def fetch_elevations_open_elevation(coords_list):
                 res_data = json.loads(response.read().decode("utf-8"))
                 results = res_data.get("results", [])
                 all_results.extend(results)
+            print(f"[FlatGIS] Elevation chunk {i // chunk_size + 1}/{total_chunks} done.")
         except Exception as e:
             print(f"[FlatGIS] Elevation chunk query failed: {e}")
             return None
-            
+
     return [item.get("elevation", 0.0) for item in all_results]
 
 
@@ -605,21 +623,29 @@ def create_default_marker_object():
         bpy.context.scene.collection.children.link(coll)
     coll.objects.link(obj)
     
-    # Create cone in bmesh
-    bm = bmesh.new()
-    bmesh.ops.create_cone(
-        bm,
-        cap_ends=True,
-        cap_tris=True,
-        segments=8,
+    # Create cone - built via the primitive_cone_add operator rather than
+    # bmesh (no compiled bmesh extension in the pip-installed `bpy` wheel,
+    # unlike a full Blender install - see cli/HEADLESS.md). The operator
+    # always creates its own new object+mesh rather than filling an
+    # existing one, so it's built into a throwaway object here and its
+    # mesh swapped onto `obj` in place of the empty placeholder mesh
+    # created above (which is then discarded).
+    bpy.ops.mesh.primitive_cone_add(
+        vertices=8,
         radius1=0.2,
         radius2=0.0,
-        depth=1.0
+        depth=1.0,
+        end_fill_type='TRIFAN',  # matches the original bmesh call's cap_tris=True
     )
-    for v in bm.verts:
-        v.co.z += 0.5 # Origin at the bottom tip
-    bm.to_mesh(mesh)
-    bm.free()
+    temp_obj = bpy.context.active_object
+    cone_mesh = temp_obj.data
+    for v in cone_mesh.vertices:
+        v.co.z += 0.5  # Origin at the bottom tip
+    cone_mesh.update()
+    obj.data = cone_mesh
+    bpy.data.objects.remove(temp_obj, do_unlink=True)
+    bpy.data.meshes.remove(mesh)  # the now-unused placeholder
+    mesh = cone_mesh
     
     # Red material
     mat = create_material("FlatGIS_Marker_Material", color=(1.0, 0.05, 0.05, 1.0), roughness=0.5)
@@ -731,6 +757,13 @@ def point_in_polygon(x, y, poly_rings):
         n = len(ring)
         inside = False
         p1x, p1y = ring[0][:2]
+        # Defensive init only: when p1y == p2y (a horizontal edge), the
+        # `py > min(p1y, p2y)` and `py <= max(p1y, p2y)` guards above
+        # collapse to `py > p1y and py <= p1y`, which can never both hold -
+        # so `xinters` is never actually read on that path. Still seeded
+        # here so the variable can't raise UnboundLocalError if this logic
+        # is ever touched again.
+        xinters = None
         for i in range(n + 1):
             p2x, p2y = ring[i % n][:2]
             if py > min(p1y, p2y):
@@ -785,7 +818,7 @@ def create_mesh_from_polygons(polygons_list, name):
 
 # --- Unified Core Import Pipeline ---
 
-def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=None):
+def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=None, warnings=None):
     # Determine reference bounds
     if bbox_bounds:
         min_lat, min_lon, max_lat, max_lon = bbox_bounds
@@ -824,10 +857,22 @@ def import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=No
     ref_lon = (min_lon + max_lon) / 2.0
     
     # --- AUTO-DETECT AND FIX SWAPPED LAT/LON FLIPS ---
-    # If ref_lat is outside [-90, 90], or looks like a typical US/European longitude 
-    # while ref_lon looks like a latitude, swap them to protect the cos(lat) calculation.
-    if abs(ref_lat) > 90.0 or (ref_lat < -45.0 and 0.0 < ref_lon < 90.0):
-        print("[FlatGIS] WARNING: Detected flipped Lat/Lon order. Correcting automatically...")
+    # A ref_lat outside [-90, 90] is the only case a swap can be confidently
+    # inferred from magnitude alone - a valid latitude is never out of that
+    # range on its own axis. (A magnitude-based southern-latitude/eastern-
+    # longitude heuristic used to live here too, but real data centered
+    # south of -45 deg between 0-90 deg east - e.g. the Prince Edward
+    # Islands, ~-46.9,37.8 - would get wrongly swapped by it, so it was
+    # dropped rather than risk a false-positive swap.)
+    if abs(ref_lat) > 90.0:
+        warning_msg = (
+            f"Detected out-of-range latitude (ref_lat={ref_lat:.3f}); "
+            "Lat/Lon order looked flipped, so it was swapped automatically. "
+            "Double-check the imported geometry's location."
+        )
+        print(f"[FlatGIS] WARNING: {warning_msg}")
+        if warnings is not None:
+            warnings.append(warning_msg)
         min_lat, min_lon = min_lon, min_lat
         max_lat, max_lon = max_lon, max_lat
         ref_lat, ref_lon = ref_lon, ref_lat
@@ -1188,7 +1233,43 @@ class FlatGISSettings(bpy.types.PropertyGroup):
         description="Paste bbox coordinates (format: min_lat, min_lon, max_lat, max_lon)",
         default=""
     )
-    
+
+    osm_timeout_seconds: bpy.props.IntProperty(
+        name="Timeout (s)",
+        description="Network timeout for the Overpass request",
+        default=90,
+        min=5,
+        max=600,
+    )
+    osm_require_confirmation: bpy.props.BoolProperty(
+        name="Confirm Large OSM Requests",
+        description="Prompt before potentially large OSM imports",
+        default=True,
+    )
+    osm_warn_bbox_area_deg2: bpy.props.FloatProperty(
+        name="Warn Area (deg^2)",
+        description="Show confirmation when bbox area exceeds this threshold",
+        default=0.25,
+        min=0.001,
+        max=100.0,
+        precision=3,
+    )
+    osm_hard_bbox_area_deg2: bpy.props.FloatProperty(
+        name="Hard Area Limit (deg^2)",
+        description="Abort imports above this bbox area",
+        default=2.0,
+        min=0.01,
+        max=1000.0,
+        precision=3,
+    )
+    osm_max_features: bpy.props.IntProperty(
+        name="Max Features",
+        description="Warn when the expected OSM feature count is unbounded or very high (0 disables the cap warning)",
+        default=2000,
+        min=0,
+        max=200000,
+    )
+
     import_terrain: bpy.props.BoolProperty(
         name="Terrain Grid",
         description="Import terrain grid mesh",
@@ -1272,33 +1353,77 @@ class OBJECT_OT_flat_gis_import_osm(bpy.types.Operator):
     bl_label = "Import OSM"
     bl_description = "Query OpenStreetMap and import flat data"
     bl_options = {"REGISTER", "UNDO"}
-    
+
+    preflight_warning: bpy.props.StringProperty(default="", options={"HIDDEN"})
+
+    def invoke(self, context, _event):
+        settings = context.scene.flat_gis_settings
+
+        if settings.bbox_min_lat >= settings.bbox_max_lat or settings.bbox_min_lon >= settings.bbox_max_lon:
+            self.report({'ERROR'}, "Invalid Bounding Box coordinates.")
+            return {'CANCELLED'}
+
+        area_deg2 = _osm_safety_shared.bbox_area_deg2(
+            settings.bbox_min_lat, settings.bbox_min_lon, settings.bbox_max_lat, settings.bbox_max_lon
+        )
+        try:
+            warnings = _osm_safety_shared.osm_preflight_messages(
+                area_deg2,
+                settings.osm_warn_bbox_area_deg2,
+                settings.osm_hard_bbox_area_deg2,
+                settings.osm_max_features,
+                False,  # this importer has no raw-Overpass-QL custom query mode
+                settings.osm_timeout_seconds,
+            )
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        if settings.osm_require_confirmation and warnings:
+            self.preflight_warning = "\n".join(warnings)
+            return context.window_manager.invoke_props_dialog(self, width=560)
+
+        self.preflight_warning = ""
+        return self.execute(context)
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.label(text="Potentially heavy OSM request", icon="ERROR")
+        for line in self.preflight_warning.split("\n"):
+            line = line.strip()
+            if line:
+                layout.label(text=line)
+        layout.separator()
+        layout.label(text="Press OK to continue, or Cancel to adjust limits.")
+
     def execute(self, context):
         settings = context.scene.flat_gis_settings
-        
+
         # Validation checks
         if not has_osm2geojson():
             self.report({'ERROR'}, "osm2geojson library is not available in Blender's python path.")
             return {'CANCELLED'}
-            
+
         import osm2geojson
-            
+
         if settings.bbox_min_lat >= settings.bbox_max_lat or settings.bbox_min_lon >= settings.bbox_max_lon:
             self.report({'ERROR'}, "Invalid Bounding Box coordinates.")
             return {'CANCELLED'}
-            
+
         # 1. Fetch Overpass Data
         self.report({'INFO'}, "Fetching OpenStreetMap data...")
-        
+        timeout_s = max(5, int(settings.osm_timeout_seconds))
+        print(f"[FlatGIS] Fetching OSM data via Overpass (timeout={timeout_s}s)...")
+
         # Formulate query
-        query = f"""[out:json][timeout:90];
+        query = f"""[out:json][timeout:{timeout_s}];
 (
   node({settings.bbox_min_lat},{settings.bbox_min_lon},{settings.bbox_max_lat},{settings.bbox_max_lon});
   way({settings.bbox_min_lat},{settings.bbox_min_lon},{settings.bbox_max_lat},{settings.bbox_max_lon});
   relation({settings.bbox_min_lat},{settings.bbox_min_lon},{settings.bbox_max_lat},{settings.bbox_max_lon});
 );
 out body geom;"""
-        
+
         endpoint = "https://overpass-api.de/api/interpreter"
         encoded = urllib.parse.urlencode({"data": query}).encode("utf-8")
         req = urllib.request.Request(
@@ -1306,33 +1431,42 @@ out body geom;"""
             data=encoded,
             headers={"User-Agent": "BlenderFlatGISImporter/1.0"}
         )
-        
+
         try:
-            with urllib.request.urlopen(req, timeout=90) as response:
+            with urllib.request.urlopen(req, timeout=timeout_s) as response:
                 content = response.read().decode("utf-8")
                 overpass_json = json.loads(content)
         except Exception as e:
             self.report({'ERROR'}, f"Failed to fetch Overpass data: {e}")
             return {'CANCELLED'}
-            
+
+        print("[FlatGIS] Overpass fetch complete. Converting to GeoJSON...")
+
         # 2. Convert to GeoJSON
         try:
             geojson_data = osm2geojson.json2geojson(overpass_json)
         except Exception as e:
             self.report({'ERROR'}, f"Failed to convert OSM to GeoJSON: {e}")
             return {'CANCELLED'}
-            
+
+        print(f"[FlatGIS] Converted {len(geojson_data.get('features', []))} OSM element(s) to GeoJSON.")
+
         # 3. Import
         try:
             bbox_bounds = (settings.bbox_min_lat, settings.bbox_min_lon, settings.bbox_max_lat, settings.bbox_max_lon)
-            import_flat_gis_geojson_data(context, geojson_data, settings, bbox_bounds=bbox_bounds)
+            import_warnings = []
+            import_flat_gis_geojson_data(
+                context, geojson_data, settings, bbox_bounds=bbox_bounds, warnings=import_warnings
+            )
+            for warning_msg in import_warnings:
+                self.report({'WARNING'}, warning_msg)
             self.report({'INFO'}, "Flat GIS OSM data imported successfully.")
         except Exception as e:
             self.report({'ERROR'}, f"Error during import: {e}")
             import traceback
             traceback.print_exc()
             return {'CANCELLED'}
-            
+
         return {'FINISHED'}
 
 class OBJECT_OT_flat_gis_import_geojson(bpy.types.Operator):
@@ -1363,7 +1497,10 @@ class OBJECT_OT_flat_gis_import_geojson(bpy.types.Operator):
             
         # Import
         try:
-            import_flat_gis_geojson_data(context, geojson_data, settings)
+            import_warnings = []
+            import_flat_gis_geojson_data(context, geojson_data, settings, warnings=import_warnings)
+            for warning_msg in import_warnings:
+                self.report({'WARNING'}, warning_msg)
             self.report({'INFO'}, "Flat GIS GeoJSON file imported successfully.")
         except Exception as e:
             self.report({'ERROR'}, f"Error during import: {e}")
@@ -1417,7 +1554,17 @@ class VIEW3D_PT_flat_gis_importer(bpy.types.Panel):
         row_lat.prop(settings, "bbox_max_lon", text="Max Lon (East)")
         
         col.prop(settings, "bbox_min_lat", text="Min Lat (South)")
-        
+
+        # OSM Safety Box
+        box_safety = layout.box()
+        box_safety.label(text="OSM Request Safety")
+        box_safety.prop(settings, "osm_timeout_seconds")
+        box_safety.prop(settings, "osm_max_features")
+        box_safety.prop(settings, "osm_require_confirmation")
+        if settings.osm_require_confirmation:
+            box_safety.prop(settings, "osm_warn_bbox_area_deg2")
+            box_safety.prop(settings, "osm_hard_bbox_area_deg2")
+
         # Terrain Options Box
         box_terrain = layout.box()
         box_terrain.label(text="Terrain & Satellite Options")

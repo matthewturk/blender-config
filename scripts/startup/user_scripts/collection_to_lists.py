@@ -1,4 +1,5 @@
-import re
+import os
+import importlib.util
 
 import bpy
 
@@ -24,26 +25,22 @@ PARAMS = {
 }
 
 
-def _natural_sort_key(name):
-    """Case-insensitive, natural (numeric-aware) sort key approximating
-    Blender's own BLI_strcasecmp_natural - which is what Collection Info's
-    "sort alphabetically" (with Separate Children checked) actually uses,
-    NOT Python's plain sorted()/str comparison. Plain sorted() is case-
-    SENSITIVE ordinal comparison, which puts every capitalized name before
-    every lowercase one (in ASCII, 'Z' < 'a') - a real, confirmed bug here:
-    mixed-case object names desynchronized this script's row order from
-    Collection Info's actual children order starting at the first lowercase
-    name, silently pointing indices at the wrong object from then on.
-
-    Each chunk is tagged (0, text) or (1, number) so chunks never compare
-    across types at the same position (e.g. a name that starts with a digit
-    next to one that doesn't) - avoiding any TypeError from comparing an int
-    to a str.
+def _load_sibling(module_name):
+    """Load a module from scripts/startup/ (one directory up from
+    user_scripts/) by file path - user_scripts/ files are loaded standalone
+    by dynamic_script_runner.py (no parent package context), so a package-
+    relative import doesn't work here. Same pattern as
+    constant_mass_emission_times.py's _load_sibling.
     """
-    return [
-        (1, int(chunk)) if chunk.isdigit() else (0, chunk.lower())
-        for chunk in re.split(r"(\d+)", name) if chunk
-    ]
+    path = os.path.join(os.path.dirname(__file__), "..", f"{module_name}.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_shared = _load_sibling("_collection_to_lists_shared")
+
 
 def smart_refresh_and_sort_outputs(tree, target_strings):
     """
@@ -61,7 +58,7 @@ def smart_refresh_and_sort_outputs(tree, target_strings):
     # Loop backwards to prevent index-shift evaluation issues during deletion
     for i in range(len(interface_list) - 1, -1, -1):
         item = interface_list[i]
-        
+
         # Safely verify it's a valid socket interface block acting as an output channel
         if hasattr(item, 'item_type') and item.item_type == 'SOCKET' and item.in_out == 'OUTPUT':
             if item.name not in target_set:
@@ -73,18 +70,18 @@ def smart_refresh_and_sort_outputs(tree, target_strings):
     for name in target_strings:
         if name not in existing_outputs:
             socket_interface = tree.interface.new_socket(
-                name=name, 
-                in_out='OUTPUT', 
+                name=name,
+                in_out='OUTPUT',
                 socket_type='NodeSocketString'
             )
-            # Sockets default to passing Field arrays. 
+            # Sockets default to passing Field arrays.
             # We explicitly ensure force_non_field is False to keep them as fields.
             socket_interface.force_non_field = False
 
     # Step 3: Enforce precise top-to-bottom visual sorting order
     # Count how many INPUT sockets are positioned before our output blocks
     input_offset = sum(
-        1 for item in tree.interface.items_tree 
+        1 for item in tree.interface.items_tree
         if hasattr(item, 'item_type') and item.item_type == 'SOCKET' and item.in_out == 'INPUT'
     )
 
@@ -92,51 +89,40 @@ def smart_refresh_and_sort_outputs(tree, target_strings):
     for target_index, name in enumerate(target_strings):
         # Dynamically evaluate where this item currently sits in the items_tree stack
         current_index = next(
-            i for i, item in enumerate(tree.interface.items_tree) 
+            i for i, item in enumerate(tree.interface.items_tree)
             if hasattr(item, 'item_type') and item.item_type == 'SOCKET' and item.in_out == 'OUTPUT' and item.name == name
         )
-        
+
         # Calculate its target destination slot relative to your input offset boundary
         desired_index = input_offset + target_index
-        
-        if current_index != desired_index:
-            tree.interface.move(current_index, desired_index)
 
-    # Force a viewport/UI redraw to instantly show layout updates
-    bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+        if current_index != desired_index:
+            # NodeTreeInterface.move(item, to_position) takes the ITEM
+            # object itself as its first argument, not an integer index -
+            # tree.interface.move(current_index, desired_index) would pass
+            # a bare int where an item is required.
+            item = tree.interface.items_tree[current_index]
+            tree.interface.move(item, desired_index)
 
 def execute(context, params):
     collection = params["input_collection"]
     node_group_name = params["node_group_name"]
     debug = params["debug"]
 
-    # Sorted with _natural_sort_key - NOT collection.objects' own iteration
-    # order (link order: the order objects were added, unrelated to name),
-    # and NOT plain sorted()/o.name either (case-sensitive, see
-    # _natural_sort_key's docstring for the real bug that caused). This is
-    # deliberate: Geometry Nodes' Collection Info node (with Separate
-    # Children checked) always outputs its children in Blender's own
-    # case-insensitive natural sort order - that's documented, fixed
-    # behavior, not something we can change from this side. If these
-    # property lists are meant to be indexed with the same index Collection
-    # Info/Get List Item produces (the whole point of building them), they
-    # have to use the SAME order GN does, or every index silently points at
-    # the wrong object.
-    ordered_objects = sorted(collection.objects, key=lambda o: _natural_sort_key(o.name))
+    if collection is None:
+        print("[collection_to_lists] No input collection set - nothing to do")
+        return {'CANCELLED'}
 
-    # Gather properties from the collection's objects. We will grab a custom
-    # property called 'my_custom_prop'. If it doesn't exist, we'll fall back
-    # to the object's name.
-    string_values = {_: [] for _ in list(set([item for o in ordered_objects
-                                              for item in o.keys()]))}
-    for obj in ordered_objects:
-        for prop in string_values:
-            prop_value = obj.get(prop, "")
-            string_values[prop].append(str(prop_value))
-        if debug:
-            print(f"[collection_to_lists] {obj.name}: " + ", ".join(
-                f"{prop}={obj.get(prop, '')!r}" for prop in string_values
-            ))
+    # Gather properties from the collection's objects - see
+    # _collection_to_lists_shared.gather_property_lists: objects are walked
+    # in Blender's own case-insensitive natural sort order (matching
+    # Collection Info's "Separate Children" output order, so indices stay
+    # aligned with it), and property keys come back sorted (deterministic)
+    # with underscore-prefixed id-property metadata (e.g. "_RNA_UI")
+    # filtered out.
+    _ordered_objects, string_values = _shared.gather_property_lists(
+        collection, debug=debug, log_prefix="[collection_to_lists]"
+    )
 
     print(f"Found {len(string_values)} items to convert into nodes.")
 
@@ -150,7 +136,7 @@ def execute(context, params):
     # 1. Filter out only the nodes you want to keep
     # This leaves the base boundary nodes intact, along with their interface wires
     nodes_to_delete = [
-        node for node in node_tree.nodes 
+        node for node in node_tree.nodes
         if node.type not in ('GROUP_INPUT', 'GROUP_OUTPUT')
     ]
 
@@ -159,7 +145,7 @@ def execute(context, params):
         node_tree.nodes.remove(node)
 
     smart_refresh_and_sort_outputs(node_tree, sorted(string_values.keys()))
-        
+
     # Create standard input/output nodes
     nodes = node_tree.nodes
     group_output = None
@@ -169,14 +155,14 @@ def execute(context, params):
             break
     if group_output is None:
         group_output = nodes.new(type='NodeGroupOutput')
-    
+
     # Position input and output
     group_output.location = (400, 0)
-    
+
     # Ensure Group Output has a Geometry socket (if it's a fresh tree)
     # if not node_tree.outputs.get("Geometry"):
     #     node_tree.outputs.new('NodeSocketGeometry', "Geometry")
-    #     
+    #
     # # Link input geometry straight to output geometry as a baseline
     # node_tree.links.new(group_input.outputs[0], group_output.inputs[0])
 
@@ -190,10 +176,10 @@ def execute(context, params):
 
         split_string = nodes.new(type="FunctionNodeSplitString")
         special_characters = nodes.new(type="FunctionNodeInputSpecialCharacters")
-        
+
         # Assign the retrieved property value to the node's string property
         string_node.string = "\n".join(string_values[prop_name])
-        
+
         # Cascade their layout locations cleanly so they don't stack on top of each other
         string_node.location = (0, y_offset)
         split_string.location = (200, y_offset)
@@ -205,7 +191,7 @@ def execute(context, params):
         node_tree.links.new(special_characters.outputs[0], split_string.inputs[1])
 
         node_tree.links.new(split_string.outputs[0], group_output.inputs[prop_name])
-        
+
         # 3. Optional verification layout check
         print(f"Linked Field Output: {group_output.inputs[prop_name]}")
 

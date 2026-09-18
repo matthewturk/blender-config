@@ -94,7 +94,15 @@ def compute_emission_times(x, y, mass_interval, num_spheres, max_spheres=50_000,
     if particle_mass <= 0:
         raise ValueError("Mass per sphere must be > 0")
 
-    k_max = int(total_mass // particle_mass)
+    if num_spheres > 0:
+        # particle_mass was derived as total_mass / num_spheres, so re-deriving
+        # k_max via floor division on that same float round-trips through a
+        # division and a multiplication back - unreliable near exact integer
+        # boundaries (confirmed off-by-one roughly half the time). num_spheres
+        # is already the exact answer the user asked for; use it directly.
+        k_max = num_spheres
+    else:
+        k_max = int(total_mass // particle_mass)
     log(f"particle_mass={particle_mass:.6g} -> k_max={k_max}")
     if k_max < 1:
         raise ValueError(

@@ -3,7 +3,7 @@ name = "blender"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "databpy>=0.7.0",
     "geonamescache>=3.0.1",
@@ -20,4 +20,6 @@ dependencies = [
     "tree-clipper>=0.1.8",
     "nodebpy>=520.6.0",
     "scipy>=1.18.0",
+    "cmyt>=2.0.2",
+    "bpy>=5.2.2",
 ]

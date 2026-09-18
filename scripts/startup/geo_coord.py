@@ -43,28 +43,43 @@ def latlon_to_xy(lat_deg, lon_deg, scale):
 
 
 def latlon_to_xy_with_bounds(lat_deg, lon_deg, scale, bounds):
-    """Equirectangular flat projection with aspect-ratio correction."""
+    """Equirectangular flat projection with aspect-ratio correction.
+
+    Longitude (X) always spans exactly ``[0, scale]`` across the bounds,
+    independent of aspect mode - this matches the STRETCH branch and
+    ``latlon_to_xy_normalized`` below. The cos(lat) aspect correction
+    therefore has to be applied to Y (dividing it, since 1 degree of
+    latitude covers more ground than 1 degree of longitude away from the
+    equator) rather than to X, or that invariant would break.
+    """
     min_lon, min_lat, max_lon, max_lat = bounds
     lon_span = max_lon - min_lon
     lat_span = max_lat - min_lat
     if lon_span <= 0 or lat_span <= 0:
         return (0.0, 0.0, 0.0)
     center_lat = math.radians((min_lat + max_lat) / 2.0)
-    cos_lat = math.cos(center_lat)
+    cos_lat = max(math.cos(center_lat), 1e-6)
     x = ((lon_deg - min_lon) / lon_span) * scale
-    y = (((lat_deg - min_lat) / lon_span) * scale) * cos_lat
+    y = (((lat_deg - min_lat) / lon_span) * scale) / cos_lat
     return (x, y, 0.0)
 
 
 def latlon_to_xy_normalized(lat_deg, lon_deg, bounds):
-    """Normalized flat projection fitting data into [0, 1] preserving aspect."""
+    """Normalized flat projection fitting data into [0, 1] preserving aspect.
+
+    Same cos(lat) correction as ``latlon_to_xy_with_bounds`` (divide Y),
+    using the bounds' center latitude as the single reference so this
+    stays an affine transform.
+    """
     min_lon, min_lat, max_lon, max_lat = bounds
     lon_span = max_lon - min_lon
     lat_span = max_lat - min_lat
     if lon_span <= 0 or lat_span <= 0:
         return (0.0, 0.0, 0.0)
+    center_lat = math.radians((min_lat + max_lat) / 2.0)
+    cos_lat = max(math.cos(center_lat), 1e-6)
     x = (lon_deg - min_lon) / lon_span
-    y = (lat_deg - min_lat) / lon_span
+    y = ((lat_deg - min_lat) / lon_span) / cos_lat
     return (x, y, 0.0)
 
 
@@ -125,11 +140,16 @@ def flat_project(lat_deg, lon_deg, settings, bounds=None):
         return (x, y, 0.0)
 
     if aspect == "PRESERVE":
-        # Apply cos(lat) correction so 1 deg lon and 1 deg lat
-        # have the same visual length at the data's center latitude.
-        # Without bounds we fall back to equator (cos(0)=1).
+        # Apply cos(lat) correction to longitude (X) so 1 deg lon and 1 deg
+        # lat have the same visual length: meridians converge away from the
+        # equator, so a degree of longitude covers less ground the higher
+        # |lat| gets. With no bounds available here, each point corrects
+        # against its own latitude rather than one shared reference, so this
+        # is only locally affine - it shears slightly across a
+        # wide-latitude-range dataset. Pass bounds (flat_fit_to_bbox) for a
+        # single reference latitude instead.
         cos_lat = math.cos(math.radians(lat_deg))
-        return (lon_deg * settings.flat_scale, lat_deg * settings.flat_scale * cos_lat, 0.0)
+        return (lon_deg * settings.flat_scale * cos_lat, lat_deg * settings.flat_scale, 0.0)
 
     return latlon_to_xy(lat_deg, lon_deg, settings.flat_scale)
 

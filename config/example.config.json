@@ -27,5 +27,14 @@
   },
   "addon_preferences": {
     "node_wrangler": {}
-  }
+  },
+  "asset_libraries": [
+    {
+      "name": "Personal Assets",
+      "path": "/home/example/blender-assets/"
+    }
+  ],
+  "extensions": [
+    "node_wrangler"
+  ]
 }

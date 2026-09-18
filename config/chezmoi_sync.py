@@ -81,6 +81,49 @@ def _apply_property_map(target, values, label):
     return applied
 
 
+def _valid_compute_device_types(cprefs):
+    """Return the set of valid Cycles compute_device_type enum identifiers."""
+    fallback = {"NONE", "CUDA", "OPTIX", "HIP", "METAL", "ONEAPI"}
+    try:
+        return set(cprefs.bl_rna.properties["compute_device_type"].enum_items.keys())
+    except Exception as e:
+        print(
+            f"[Chezmoi/Preferences Warning] Could not introspect compute_device_type enum ({e}); using fallback list."
+        )
+        return fallback
+
+
+def _apply_render_device_type(cprefs, device_type):
+    """Validate and apply the Cycles compute device type defensively."""
+    if not isinstance(device_type, str):
+        print(
+            f"[Chezmoi/Preferences Warning] render_device_type must be a string, got: {device_type!r}; skipping."
+        )
+        return
+
+    normalized = device_type.strip().upper()
+    valid_types = _valid_compute_device_types(cprefs)
+
+    if normalized not in valid_types:
+        print(
+            f"[Chezmoi/Preferences Warning] Invalid render_device_type '{device_type}' "
+            f"(expected one of {sorted(valid_types)}); skipping."
+        )
+        return
+
+    try:
+        cprefs.compute_device_type = normalized
+        if normalized != "NONE":
+            cprefs.get_devices()
+            for device in cprefs.devices:
+                device.use = True
+        print(f"[Chezmoi/Preferences] Applied render device type: {normalized}")
+    except Exception as e:
+        print(
+            f"[Chezmoi/Preferences Warning] Failed to set render_device_type '{normalized}': {e}"
+        )
+
+
 def _apply_theme_preset(theme_name):
     """Apply a bundled or user interface theme preset by its display name."""
     if not theme_name:
@@ -117,8 +160,17 @@ def load_and_sync_chezmoi(dummy=None):
     config = {}
     prefs = bpy.context.preferences
 
-    # Define paths relative to your local blender config directory
-    project_dir = os.path.expanduser("~/.config/blender/blender-config")
+    # project_dir resolved relative to this file's own location (config/
+    # chezmoi_sync.py -> repo root is one level up) rather than a
+    # hardcoded absolute path, so this repo can live anywhere - see the
+    # matching comment in scripts/startup/flat_gis_importer.py's
+    # _ensure_venv(), which had the same hardcoded-path issue.
+    # config_path is intentionally NOT relative to the repo - the actual
+    # rendered preferences file lives outside it entirely, at a fixed
+    # location under the user's Blender config dir (chezmoi renders
+    # config/config.json.tmpl to there, it's never read from inside this
+    # repo directly).
+    project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     config_path = os.path.expanduser("~/.config/blender/config.json")
 
     # -------------------------------------------------------------------------
@@ -136,15 +188,7 @@ def load_and_sync_chezmoi(dummy=None):
             # 2. Configure Compute/Render Devices (Cycles)
             if "render_device_type" in config and "cycles" in prefs.addons:
                 cprefs = prefs.addons["cycles"].preferences
-                device_type = config["render_device_type"]
-
-                if device_type != "NONE":
-                    cprefs.compute_device_type = device_type
-                    cprefs.get_devices()
-                    for device in cprefs.devices:
-                        device.use = True
-                else:
-                    cprefs.compute_device_type = "NONE"
+                _apply_render_device_type(cprefs, config["render_device_type"])
 
             # 3. Apply Interface Theme Preset
             if "theme" in config:
@@ -311,76 +355,92 @@ def load_and_sync_chezmoi(dummy=None):
     if "asset_libraries" in config:
         filepath_prefs = prefs.filepaths
 
-        for lib_cfg in config["asset_libraries"]:
-            target_name = lib_cfg["name"]
-            target_path = os.path.expanduser(lib_cfg["path"])
-            target_method = lib_cfg.get("import_method", "LINK").upper()
-
-            if not os.path.exists(target_path):
-                print(
-                    f"[Chezmoi/Preferences Warning] Skipping asset library '{target_name}'; path does not exist: {target_path}"
-                )
-                continue
-
-            # Search for an existing library matching this exact name
-            existing_lib = next(
-                (
-                    lib
-                    for lib in filepath_prefs.asset_libraries
-                    if lib.name == target_name
-                ),
-                None,
+        for index, lib_cfg in enumerate(config["asset_libraries"]):
+            entry_label = (
+                lib_cfg.get("name", f"#{index}")
+                if isinstance(lib_cfg, dict)
+                else f"#{index}"
             )
-
-            if existing_lib:
-                # Name match found! Check if the path or method needs to be synchronized
-                updated = False
-
-                # Normalize paths to avoid false mismatches from trailing slashes
-                if os.path.normpath(existing_lib.path) != os.path.normpath(target_path):
-                    existing_lib.path = target_path
-                    updated = True
-                    print(
-                        f"[Chezmoi/Preferences] Remapped path for asset library '{target_name}' -> {target_path}"
-                    )
-
-                if existing_lib.import_method != target_method:
-                    existing_lib.import_method = target_method
-                    updated = True
-                    print(
-                        f"[Chezmoi/Preferences] Updated import method for '{target_name}' -> {target_method}"
-                    )
-
-                if not updated:
-                    print(
-                        f"[Chezmoi/Preferences] Asset library '{target_name}' is already up-to-date."
-                    )
-                continue
-
-            # If the name doesn't exist at all, check if the path is duplicated under a different name
-            if any(
-                os.path.normpath(lib.path) == os.path.normpath(target_path)
-                for lib in filepath_prefs.asset_libraries
-            ):
-                print(
-                    f"[Chezmoi/Preferences Warning] Path '{target_path}' is already registered under a different library name. Skipping."
-                )
-                continue
-
-            # Safe to add a brand new library entry
             try:
-                bpy.ops.preferences.asset_library_add(directory=target_path)
-                new_lib = filepath_prefs.asset_libraries[-1]
-                new_lib.name = target_name
-                if target_method in {"LINK", "APPEND", "APPEND_REUSE"}:
-                    new_lib.import_method = target_method
-                print(
-                    f"[Chezmoi/Preferences] Successfully attached asset library: {target_name} -> {target_path} ({target_method})"
+                target_name = lib_cfg["name"]
+                target_path = os.path.expanduser(lib_cfg["path"])
+                target_method = lib_cfg.get("import_method", "LINK").upper()
+
+                if not os.path.exists(target_path):
+                    print(
+                        f"[Chezmoi/Preferences Warning] Skipping asset library '{target_name}'; path does not exist: {target_path}"
+                    )
+                    continue
+
+                # Search for an existing library matching this exact name
+                existing_lib = next(
+                    (
+                        lib
+                        for lib in filepath_prefs.asset_libraries
+                        if lib.name == target_name
+                    ),
+                    None,
                 )
+
+                if existing_lib:
+                    # Name match found! Check if the path or method needs to be synchronized
+                    updated = False
+
+                    # Normalize paths to avoid false mismatches from trailing slashes
+                    if os.path.normpath(existing_lib.path) != os.path.normpath(target_path):
+                        existing_lib.path = target_path
+                        updated = True
+                        print(
+                            f"[Chezmoi/Preferences] Remapped path for asset library '{target_name}' -> {target_path}"
+                        )
+
+                    if existing_lib.import_method != target_method:
+                        if target_method in {"LINK", "APPEND", "APPEND_REUSE"}:
+                            existing_lib.import_method = target_method
+                            updated = True
+                            print(
+                                f"[Chezmoi/Preferences] Updated import method for '{target_name}' -> {target_method}"
+                            )
+                        else:
+                            print(
+                                f"[Chezmoi/Preferences Warning] Invalid import_method '{target_method}' for asset library '{target_name}'; skipping method update."
+                            )
+
+                    if not updated:
+                        print(
+                            f"[Chezmoi/Preferences] Asset library '{target_name}' is already up-to-date."
+                        )
+                    continue
+
+                # If the name doesn't exist at all, check if the path is duplicated under a different name
+                if any(
+                    os.path.normpath(lib.path) == os.path.normpath(target_path)
+                    for lib in filepath_prefs.asset_libraries
+                ):
+                    print(
+                        f"[Chezmoi/Preferences Warning] Path '{target_path}' is already registered under a different library name. Skipping."
+                    )
+                    continue
+
+                # Safe to add a brand new library entry
+                try:
+                    bpy.ops.preferences.asset_library_add(directory=target_path)
+                    new_lib = filepath_prefs.asset_libraries[-1]
+                    new_lib.name = target_name
+                    if target_method in {"LINK", "APPEND", "APPEND_REUSE"}:
+                        new_lib.import_method = target_method
+                    print(
+                        f"[Chezmoi/Preferences] Successfully attached asset library: {target_name} -> {target_path} ({target_method})"
+                    )
+                except Exception as e:
+                    print(
+                        f"[Chezmoi/Preferences Error] Failed to register asset library: {e}"
+                    )
             except Exception as e:
                 print(
-                    f"[Chezmoi/Preferences Error] Failed to register asset library: {e}"
+                    f"[Chezmoi/Preferences Warning] Failed to process asset library entry '{entry_label}': {e}"
                 )
+                continue
     # -------------------------------------------------------------------------
     # PART 4: Automated Extension/Add-on Synchronization (Blender 4.2+)
     # -------------------------------------------------------------------------

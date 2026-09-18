@@ -208,7 +208,7 @@ def load_external_scripts():
         return []
 
     items = []
-    for f in os.listdir(scripts_dir):
+    for f in sorted(os.listdir(scripts_dir)):
         if f.endswith(".py") and not f.startswith("__"):
             path = os.path.join(scripts_dir, f)
             module_name = f[:-3]
@@ -247,7 +247,7 @@ def load_node_scripts():
         return []
 
     items = []
-    for f in os.listdir(scripts_dir):
+    for f in sorted(os.listdir(scripts_dir)):
         if f.endswith(".py") and not f.startswith("__"):
             path = os.path.join(scripts_dir, f)
             module_name = f[:-3]
@@ -311,7 +311,11 @@ def make_dynamic_operator(script_name, mod):
         runtime_params = collect_params_from_context(
             context, "sr_props", script_name, mod
         )
-        return mod.execute(context, runtime_params)
+        try:
+            return mod.execute(context, runtime_params)
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to run '{script_name}': {e}")
+            return {'CANCELLED'}
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
@@ -403,16 +407,19 @@ class SR_OT_reload_scripts(bpy.types.Operator):
     def execute(self, context):
         global DYNAMIC_CLASSES
 
-        for cls in DYNAMIC_CLASSES:
+        for cls in list(DYNAMIC_CLASSES):
             try:
-                if issubclass(cls, bpy.types.PropertyGroup):
+                if issubclass(cls, bpy.types.PropertyGroup) and cls.__name__.startswith("sr_props_"):
                     prop_name = cls.__name__
                     if hasattr(bpy.types.Scene, prop_name):
                         delattr(bpy.types.Scene, prop_name)
-                bpy.utils.unregister_class(cls)
+                    bpy.utils.unregister_class(cls)
+                    DYNAMIC_CLASSES.remove(cls)
+                elif cls.__name__.startswith("SR_OT_dynamic_"):
+                    bpy.utils.unregister_class(cls)
+                    DYNAMIC_CLASSES.remove(cls)
             except Exception:
                 pass
-        DYNAMIC_CLASSES.clear()
 
         script_items = load_external_scripts()
         for name, _, _ in script_items:
@@ -559,6 +566,9 @@ def register():
 
 def unregister():
     global DYNAMIC_CLASSES
+    if bpy.app.timers.is_registered(_reload_all):
+        bpy.app.timers.unregister(_reload_all)
+
     for cls in DYNAMIC_CLASSES:
         try:
             if issubclass(cls, bpy.types.PropertyGroup):

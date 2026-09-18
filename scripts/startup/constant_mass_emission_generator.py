@@ -257,6 +257,61 @@ def _filter_country_pair(settings, depsgraph, log):
     return x_full[mask].astype(np.float64), y_full[mask].astype(np.float64)
 
 
+def _ensure_result_type(obj):
+    """If obj's fixed Object.type doesn't match its cmet_settings.result_type
+    (the user just switched "Output Type" on an existing generator),
+    Object.data can't be reassigned across that type boundary - a MESH
+    object can never become a CURVES object (or back) via a `.data` swap,
+    since .type is fixed at Object creation. The only way to actually switch
+    is to delete this Object and build a fresh one of the right type, the
+    same way OBJECT_OT_cmet_add/_new_generator_data do at initial-creation
+    time, preserving name/transform/collection membership.
+
+    cmet_settings is itself a PropertyGroup living on the Object, so it dies
+    along with the old Object - every field is read off into a plain dict
+    before removing anything, then copied onto the new Object's own (freshly
+    default-initialized) cmet_settings afterward.
+
+    Returns obj unchanged if no rebuild was needed, otherwise the new object
+    to use in its place - the passed-in obj may already be removed from
+    bpy.data by the time this returns, so callers must switch to the
+    returned reference.
+    """
+    settings = obj.cmet_settings
+    desired_type = "MESH" if settings.result_type == "MESH" else "CURVES"
+    if obj.type == desired_type:
+        return obj
+
+    old_name = obj.name
+    old_matrix = obj.matrix_world.copy()
+    collections = list(obj.users_collection) or [bpy.context.scene.collection]
+    old_data = obj.data
+    saved_settings = {
+        prop.identifier: getattr(settings, prop.identifier)
+        for prop in settings.bl_rna.properties
+        if prop.identifier != "rna_type"
+    }
+
+    bpy.data.objects.remove(obj, do_unlink=True)
+    if old_data is not None and old_data.users == 0:
+        if isinstance(old_data, bpy.types.Mesh):
+            bpy.data.meshes.remove(old_data)
+        else:
+            bpy.data.hair_curves.remove(old_data)
+
+    new_data = _new_generator_data(old_name, saved_settings["result_type"])
+    new_obj = bpy.data.objects.new(old_name, new_data)
+    for col in collections:
+        col.objects.link(new_obj)
+    new_obj.matrix_world = old_matrix
+
+    new_settings = new_obj.cmet_settings
+    for identifier, value in saved_settings.items():
+        setattr(new_settings, identifier, value)
+
+    return new_obj
+
+
 def _recompute_and_write(obj, depsgraph):
     settings = obj.cmet_settings
     log = (lambda msg: print(f"[CMET] '{obj.name}': {msg}")) if settings.debug else (lambda msg: None)
@@ -294,6 +349,11 @@ def _recompute_and_write(obj, depsgraph):
     log("writing geometry/attributes")
 
     result_type = settings.result_type
+    # obj.type is already guaranteed to match result_type here - _safe_recompute
+    # calls _ensure_result_type() before this function ever runs, so the
+    # isinstance() checks below only ever trigger on a point-count mismatch,
+    # never a type mismatch (Object.data can't be reassigned across a
+    # MESH<->CURVES type boundary at all, hence _ensure_result_type existing).
     if result_type == "MESH":
         if not isinstance(obj.data, bpy.types.Mesh) or len(obj.data.vertices) != k_max:
             new_data = bpy.data.meshes.new(name=obj.name)
@@ -326,6 +386,19 @@ def _recompute_and_write(obj, depsgraph):
         # separate Pair Filter object just for country positions.
         _write_vector_attribute(obj, "country_a_position", np.tile(country_a_position, (k_max, 1)))
         _write_vector_attribute(obj, "country_b_position", np.tile(country_b_position, (k_max, 1)))
+    else:
+        # DIRECT mode writes no country positions - but if this object was
+        # previously run in COUNTRY_PAIR mode, its data-block may still carry
+        # these attributes from before, and the point-count check above only
+        # rebuilds the data-block when k_max actually changes, so a stale
+        # DIRECT-mode run with the same k_max as the old COUNTRY_PAIR run
+        # would otherwise silently keep the old values forever. Explicitly
+        # drop them here - a no-op when they're already absent.
+        data = obj.data
+        for stale_name in ("country_a_position", "country_b_position"):
+            stale_attr = data.attributes.get(stale_name)
+            if stale_attr is not None:
+                data.attributes.remove(stale_attr)
 
     total_mass = float(np.sum(y))
     leftover = total_mass - k_max * particle_mass
@@ -335,12 +408,69 @@ def _recompute_and_write(obj, depsgraph):
     )
 
 
+def _needs_result_type_rebuild(obj):
+    """Cheap, side-effect-free check for whether _ensure_result_type() would
+    need to delete+recreate obj (Output Type just switched away from its
+    current fixed Object.type). Used by _on_depsgraph_update to decide
+    whether it's safe to recompute immediately or must defer - see
+    _deferred_recompute below.
+    """
+    desired_type = "MESH" if obj.cmet_settings.result_type == "MESH" else "CURVES"
+    return obj.type != desired_type
+
+
+def _deferred_recompute(name):
+    """One-shot bpy.app.timers callback: performs the actual rebuild
+    (_ensure_result_type's delete+recreate Object) and recompute for a
+    tracked object whose Output Type was just changed.
+
+    This can only safely run outside bpy.app.handlers.depsgraph_update_post.
+    Deleting/creating an Object is a structural scene edit - exactly what
+    Blender's API docs warn against doing from inside that handler (unlike
+    the data-block/attribute writes _recompute_and_write already did there
+    before this rebuild path existed, which is an accepted, much smaller
+    risk). _on_depsgraph_update detects the pending type mismatch via
+    _needs_result_type_rebuild() and defers here via bpy.app.timers.register
+    instead of calling _safe_recompute() directly, so the actual rebuild
+    always happens on its own timer tick, never mid-depsgraph-evaluation.
+    """
+    obj = bpy.data.objects.get(name)
+    if obj is None or not obj.cmet_settings.is_cmet_generator:
+        return None
+    _safe_recompute(obj, bpy.context.evaluated_depsgraph_get())
+    return None
+
+
+def _recompute_or_defer(obj, depsgraph):
+    """The only call this module's depsgraph_update_post handler makes -
+    routes to a deferred timer when a rebuild is needed (see
+    _deferred_recompute), otherwise runs _safe_recompute() immediately as
+    before (data-block/attribute writes only in that case, no Object
+    add/remove)."""
+    if _needs_result_type_rebuild(obj):
+        name = obj.name
+        bpy.app.timers.register(lambda: _deferred_recompute(name), first_interval=0.0)
+        return
+    _safe_recompute(obj, depsgraph)
+
+
 def _safe_recompute(obj, depsgraph):
+    """Runs _ensure_result_type() up front (outside the try/except) so that,
+    on an Output Type switch, the rebuild itself - and the resulting new
+    object reference - is settled before anything exception-prone runs.
+    Always returns the object callers should use from here on: the original
+    obj if no rebuild happened, otherwise the replacement _ensure_result_type
+    built (the original obj may already be removed from bpy.data by then, so
+    every caller MUST switch to using the returned reference, not the one it
+    passed in).
+    """
+    obj = _ensure_result_type(obj)
     try:
         _recompute_and_write(obj, depsgraph)
     except Exception as e:
         obj.cmet_settings.last_status = f"ERROR: {e}"
         print(f"[constant_mass_emission_generator] '{obj.name}' failed to update: {e}")
+    return obj
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +565,14 @@ class OBJECT_OT_cmet_add(bpy.types.Operator):
         obj.select_set(True)
 
         if settings.source_object is not None:
-            _safe_recompute(obj, context.evaluated_depsgraph_get())
+            # obj.type already matches settings.result_type here (data was
+            # just built from self.result_type above), so _safe_recompute's
+            # internal _ensure_result_type() call is a guaranteed no-op on
+            # this fresh object - but it always returns the object callers
+            # should use from here on, so rebind obj/settings from it anyway
+            # rather than assuming that invariant from the caller's side.
+            obj = _safe_recompute(obj, context.evaluated_depsgraph_get())
+            settings = obj.cmet_settings
             if settings.auto_update:
                 _TRACKED.add(obj.name)
             if settings.last_status.startswith("ERROR"):
@@ -468,7 +605,19 @@ class OBJECT_OT_cmet_generate(bpy.types.Operator):
             self.report({"ERROR"}, "Set a Source Object first")
             return {"CANCELLED"}
 
-        _safe_recompute(obj, context.evaluated_depsgraph_get())
+        # _safe_recompute may delete and replace obj entirely (an Output Type
+        # switch since the last run - Object.type is fixed at creation, so
+        # that can't be done via a `.data` swap). It always returns the
+        # object to keep using, which - unlike the stale obj this method
+        # started with - is guaranteed to still be a live bpy.data.objects
+        # entry; use that from here on, and make it the active/selected
+        # object again since the original one it replaced no longer exists.
+        obj = _safe_recompute(obj, context.evaluated_depsgraph_get())
+        context.view_layer.objects.active = obj
+        for o in context.selected_objects:
+            o.select_set(False)
+        obj.select_set(True)
+
         if obj.cmet_settings.auto_update:
             _TRACKED.add(obj.name)
         status = obj.cmet_settings.last_status
@@ -634,13 +783,13 @@ def _on_depsgraph_update(scene, depsgraph):
                 w in changed_ids or (w.data is not None and w.data in changed_ids) for w in watched
             )
             if settings_changed or data_changed:
-                _safe_recompute(obj, depsgraph)
+                _recompute_or_defer(obj, depsgraph)
         else:
             src = settings.source_object
             if src is None:
                 continue
             if settings_changed or src in changed_ids or (src.data is not None and src.data in changed_ids):
-                _safe_recompute(obj, depsgraph)
+                _recompute_or_defer(obj, depsgraph)
 
 
 @persistent

@@ -5,7 +5,6 @@ import os
 import tempfile
 
 import bpy
-import bmesh
 from bpy_extras.io_utils import ImportHelper
 
 from . import geo_coord
@@ -45,6 +44,8 @@ _POINT_ATTRS = (
 
 _TRACK_ATTRS = ("name", "cmt", "desc", "src", "number", "type")
 
+_POINT_ATTR_TYPES = dict(_POINT_ATTRS)
+
 
 def _extract_point_attrs(waypoint):
     attrs = {}
@@ -59,6 +60,8 @@ def _extract_point_attrs(waypoint):
                 attrs[attr_name] = str(value)
         elif attr_name == "fix":
             attrs[attr_name] = str(value) if value is not None else ""
+        elif _POINT_ATTR_TYPES.get(attr_name) == "STRING":
+            attrs[attr_name] = str(value)
         else:
             try:
                 attrs[attr_name] = float(value)
@@ -166,10 +169,10 @@ def _build_track_object(name, track, coord_settings, collection):
             vertices.append((x, y, z))
 
             row = {}
+            pattrs = _extract_point_attrs(pt)
+            eattrs = _extract_extension_attrs(pt)
+            combined = {**pattrs, **eattrs}
             for key in all_keys:
-                pattrs = _extract_point_attrs(pt)
-                eattrs = _extract_extension_attrs(pt)
-                combined = {**pattrs, **eattrs}
                 row[key] = combined.get(key)
             vert_data.append(row)
             offset += 1
@@ -268,7 +271,7 @@ def _build_wpt_object(name, waypoints, coord_settings, collection):
                 attr.data[i].value = str(v).encode("utf-8") if v is not None else b""
 
     obj = bpy.data.objects.new(name, mesh)
-    obj.display_type = "PLAINS"
+    obj.display_type = "SOLID"
     collection.objects.link(obj)
     return obj
 

@@ -131,12 +131,38 @@ def execute(context, params):
         obj_data = bpy.data.hair_curves.new(name=object_name)
         obj_data.add_curves([n_rows])
 
+    desired_obj_type = "MESH" if output_type == "MESH" else "CURVES"
     obj = bpy.data.objects.get(object_name)
     if obj is None:
         obj = bpy.data.objects.new(object_name, obj_data)
         target_collection.objects.link(obj)
+    elif obj.type != desired_obj_type:
+        # Object.type is fixed at creation - Object.data can only ever be
+        # reassigned to a data-block of that same type, so a MESH object
+        # can't become a CURVES object (or back) via a `.data` swap. Preserve
+        # name/transform/collection membership, but the Object itself has to
+        # be recreated to actually switch types.
+        old_matrix = obj.matrix_world.copy()
+        collections = list(obj.users_collection) or [target_collection]
+        old_data = obj.data
+        bpy.data.objects.remove(obj, do_unlink=True)
+        if old_data is not None and old_data.users == 0:
+            if isinstance(old_data, bpy.types.Mesh):
+                bpy.data.meshes.remove(old_data)
+            else:
+                bpy.data.hair_curves.remove(old_data)
+        obj = bpy.data.objects.new(object_name, obj_data)
+        for col in collections:
+            col.objects.link(obj)
+        obj.matrix_world = old_matrix
     elif obj.data != obj_data:
+        old_data = obj.data
         obj.data = obj_data
+        if old_data is not None and old_data.users == 0:
+            if isinstance(old_data, bpy.types.Mesh):
+                bpy.data.meshes.remove(old_data)
+            else:
+                bpy.data.hair_curves.remove(old_data)
 
     if output_type == "CURVES":
         db.store_named_attribute(

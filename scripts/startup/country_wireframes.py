@@ -8,10 +8,10 @@ import urllib.parse
 import urllib.request
 
 import bpy
-import bmesh
 from bpy_extras.io_utils import ImportHelper
 
 from . import geo_coord
+from . import _osm_safety_shared
 from .geo_coord import (
     flat_project,
     latlon_to_unit,
@@ -98,8 +98,9 @@ def _load_world_dataset(gpd, scale="110M"):
             pass
 
     url = _NE_ADMIN0_COUNTRIES_URLS[scale]
+    print(f"[Geo Wireframes] Fetching world boundaries ({scale} scale) from {url} ...")
     try:
-        return gpd.read_file(url)
+        world = gpd.read_file(url)
     except Exception as exc:
         raise RuntimeError(
             "Could not load world boundaries from geopandas built-ins or "
@@ -107,6 +108,8 @@ def _load_world_dataset(gpd, scale="110M"):
             "geopandas with bundled datasets or pre-download the Natural "
             f"Earth countries ZIP. Last error: {exc}"
         ) from exc
+    print(f"[Geo Wireframes] World boundaries fetch complete ({len(world)} feature(s)).")
+    return world
 
 
 def _pick_column(columns, candidates):
@@ -175,6 +178,7 @@ def _normalize_world_columns(gpd, world):
 
 
 def _load_geo_data(scale="110M"):
+    print(f"[Geo Wireframes] Loading world boundary dataset ({scale} scale)...")
     try:
         import geopandas as gpd
     except Exception as exc:
@@ -239,6 +243,10 @@ def _load_geo_data(scale="110M"):
             "geometry": unioned,
         }
 
+    print(
+        f"[Geo Wireframes] World boundary dataset ready: {len(world)} countries, "
+        f"{len(continents)} continents."
+    )
     return world, countries_by_key, continents
 
 
@@ -277,6 +285,7 @@ def _ensure_blue_marble_fallback_texture():
     if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
         return target_path
 
+    print("[Geo Wireframes] Generating fallback Blue Marble texture (no cached copy found)...")
     world, _, _ = _load_geo_data()
 
     try:
@@ -334,6 +343,7 @@ def _ensure_blue_marble_fallback_texture():
             except Exception:
                 pass
 
+    print(f"[Geo Wireframes] Fallback Blue Marble texture ready: {target_path}")
     return target_path
 
 
@@ -822,11 +832,24 @@ def _collapse_outliner_view():
 
 
 def _get_or_create_collection(parent, name):
-    existing = bpy.data.collections.get(name)
+    # Scoped to `parent`'s own children, NOT a global bpy.data.collections
+    # lookup - a global lookup here silently re-attaches a same-named
+    # collection from anywhere else in the file, including one that
+    # _archive_geojson_imports() just archived: archiving only renames the
+    # outer "GeoJSON Imports" wrapper with a timestamp, never its INNER
+    # per-feature-type subcollections (e.g. "GeoJSON_unknown", used by any
+    # GeoJSON with no recognized OSM tag - i.e. most non-OSM data), so a
+    # later import reusing that same type_label would find the OLD,
+    # already-archived subcollection by name and link it in as an
+    # additional parent of the NEW "GeoJSON Imports" too - resurrecting
+    # every object it still holds, with no old link ever removed. Real,
+    # confirmed bug: two sequential GeoJSON imports (US counties, then US
+    # states, neither with OSM tags so both use "GeoJSON_unknown") - the
+    # second import's result held 3221 archived county objects it should
+    # never have contained, on top of its own real 52.
+    existing = _get_child_collection(parent, name)
     if existing is None:
         existing = bpy.data.collections.new(name)
-        parent.children.link(existing)
-    elif existing.name not in parent.children:
         parent.children.link(existing)
     return existing
 
@@ -948,16 +971,26 @@ def _build_sphere_mesh(
     resolution,
     add_surface,
 ):
-    mesh = bpy.data.meshes.new(mesh_name)
-    bm = bmesh.new()
-    bmesh.ops.create_uvsphere(
-        bm,
-        u_segments=resolution,
-        v_segments=max(3, resolution // 2),
+    # Built via the primitive_uv_sphere_add operator rather than bmesh -
+    # bmesh has no compiled extension in the pip-installed `bpy` wheel
+    # (unlike a full Blender install/its bundled Python), only in a real
+    # Blender application - confirmed directly, see cli/HEADLESS.md. The
+    # operator needs an active collection/view layer, which always exists
+    # even fully headless with no GPU (confirmed directly too). Built into
+    # a throwaway object so the rest of this function can keep working
+    # purely on the resulting `mesh` datablock, exactly as before -
+    # everything below here (UV unwrap, pole/seam handling) only reads
+    # mesh.vertices/polygons/loops, with no assumption about how the mesh
+    # was constructed, just that it's a normal UV-sphere topology.
+    bpy.ops.mesh.primitive_uv_sphere_add(
+        segments=resolution,
+        ring_count=max(3, resolution // 2),
         radius=radius,
     )
-    bm.to_mesh(mesh)
-    bm.free()
+    temp_obj = bpy.context.active_object
+    mesh = temp_obj.data
+    mesh.name = mesh_name
+    bpy.data.objects.remove(temp_obj, do_unlink=True)
     mesh.update()
 
     uv_layer = mesh.uv_layers.new(name="GeoUV")
@@ -1164,6 +1197,21 @@ def _feature_name_from_properties(properties, fallback):
 
     return fallback
 
+def _truncate_utf8_bytes(name, max_bytes):
+    """Truncate to Blender's object-name limit, which is 63 UTF-8 BYTES, not
+    characters - a name with accented/CJK/Cyrillic characters can still be
+    too long after character-based truncation. A byte-level slice can land
+    mid-character; errors="ignore" drops whatever incomplete trailing bytes
+    that leaves instead of raising. Same fix as user_scripts/csv_menu_select
+    .py's _truncate_utf8, replicated here rather than imported since that
+    module lives in a differently-loaded registry (user_scripts/).
+    """
+    encoded = name.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return name
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
 def _safe_object_name(text, fallback="Feature"):
     value = str(text).strip().replace(": ", "_")
     if not value:
@@ -1179,29 +1227,7 @@ def _safe_object_name(text, fallback="Feature"):
     name = "".join(cleaned).strip()
     if not name:
         name = fallback
-    return name[:63]
-
-import bpy
-
-def get_or_create_sub_collection(parent_collection, name):
-    """
-    Finds a sub-collection by name under a parent collection. 
-    Creates and links it if it doesn't exist.
-    """
-    # Standardize the collection name (e.g., capitalize it)
-    coll_name = str(name).strip().capitalize()
-    
-    # Check if it already exists under the parent
-    if coll_name in parent_collection.children:
-        return parent_collection.children[coll_name]
-        
-    # If not, create a brand new collection data block
-    new_coll = bpy.data.collections.new(coll_name)
-    
-    # Link it underneath the parent collection to maintain hierarchy
-    parent_collection.children.link(new_coll)
-    
-    return new_coll
+    return _truncate_utf8_bytes(name, 63)
 
 def _clear_collection_recursive(collection):
     for child in list(collection.children):
@@ -1495,6 +1521,33 @@ def _create_geojson_point_object(
     return obj
 
 
+_INT32_MIN = -(2 ** 31)
+_INT32_MAX = 2 ** 31 - 1
+
+
+def _safe_custom_property_value(value):
+    """Blender custom (ID) properties store a plain Python `int` as a
+    32-bit C int - assigning one outside that range raises OverflowError.
+    Real-world trigger: US Census GeoJSON county polygons carry an
+    'ALAND'/'AWATER' land/water-area-in-square-meters property that's
+    genuinely a Python int (JSON numbers with no decimal point parse as
+    int, unlike raw OSM XML tags which are always strings) and routinely
+    exceeds 2**31-1 for larger counties (e.g. Baldwin County, AL:
+    ALAND=4117656199).
+
+    Only ints need this - a Python float assigns to a full C double, with
+    no equivalent range problem. Falling back to str() keeps the value
+    exactly, with no precision loss (unlike coercing to float, which
+    starts silently losing precision above 2**53) - at the cost of it no
+    longer being numeric. In-range ints/floats/strings/bools pass through
+    unchanged.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < _INT32_MIN or value > _INT32_MAX:
+            return str(value)
+    return value
+
+
 def _import_geojson_feature_payload(
     context,
     settings,
@@ -1526,6 +1579,7 @@ def _import_geojson_feature_payload(
     overlay_radius = coord_settings.globe_radius
     line_created = 0
     point_created = 0
+    unknown_type_count = 0
     latlon_bounds = _bounds_from_geojson_payload(payload) if coord_settings.flat_fit_to_bbox else None
 
     sphere_mesh = None
@@ -1545,6 +1599,7 @@ def _import_geojson_feature_payload(
         proto_obj.hide_render = True
         imports_coll.objects.link(proto_obj)
 
+    print(f"[Geo Wireframes] Converting {len(payload)} GeoJSON feature(s) from '{source_label}'...")
     for index, feature in enumerate(payload, start=1):
         feature_name = str(feature.get("name", f"Feature_{index}")).strip()
         properties = {key: value for key, value in (feature.get("properties", {}) or {}).items() if value is not None}
@@ -1565,7 +1620,14 @@ def _import_geojson_feature_payload(
             type_label = properties["type"]  # Fallback to a custom feature 'type' if defined
         else:
             type_label = "GeoJSON_unknown"  # Ultimate fallback to geometry style (e.g., 'Points', 'Polygons')
-            print(properties)
+            # Printed in full only once as a diagnostic sample - a dataset
+            # with no OSM-style tags at all (e.g. US Census county
+            # polygons, which carry FID/GISJOIN/ALAND/... instead) would
+            # otherwise dump every single feature's properties dict here,
+            # one print per feature (thousands, for a large file).
+            if unknown_type_count == 0:
+                print(f"[Geo Wireframes] Untyped feature properties (showing first only): {properties}")
+            unknown_type_count += 1
 
         if not feature_name:
             feature_name = f"Feature_{index}"
@@ -1575,8 +1637,7 @@ def _import_geojson_feature_payload(
         )
 
         if settings.geojson_split_collections:
-            feature_coll = get_or_create_sub_collection(imports_coll,
-                                                        type_label)
+            feature_coll = _get_or_create_collection(imports_coll, type_label)
         else:
             feature_coll = imports_coll
 
@@ -1630,7 +1691,7 @@ def _import_geojson_feature_payload(
                 line_created += 1
                 for key, value in sorted(properties.items()):
                     if value is not None:
-                        line_obj[f"osm:{key}"] = value
+                        line_obj[f"osm:{key}"] = _safe_custom_property_value(value)
 
         if settings.geojson_point_mode == "IGNORE":
             continue
@@ -1666,9 +1727,18 @@ def _import_geojson_feature_payload(
             point_obj["geo_lat"] = lat
             for key, value in properties.items():
                 if value is not None:
-                    point_obj[f"osm:{key}"] = value
+                    point_obj[f"osm:{key}"] = _safe_custom_property_value(value)
             point_created += 1
 
+    if unknown_type_count:
+        print(
+            f"[Geo Wireframes] {unknown_type_count} feature(s) had no "
+            f"recognized type tag - categorized as 'GeoJSON_unknown'."
+        )
+    print(
+        f"[Geo Wireframes] Done: {line_created} line feature(s), "
+        f"{point_created} point marker(s) created."
+    )
     return line_created, point_created
 
 
@@ -1685,48 +1755,22 @@ def _parse_osm_bbox(raw_text):
     return (south, west, north, east)
 
 
-def _bbox_area_deg2(south, west, north, east):
-    return max(0.0, north - south) * max(0.0, east - west)
-
-
 def _osm_preflight_messages(settings):
-    messages = []
-
+    """Thin settings-object adapter around the shared preflight check in
+    _osm_safety_shared - see that module for the actual threshold logic,
+    which flat_gis_importer.py's OSM importer also uses.
+    """
     south, west, north, east = _parse_osm_bbox(settings.osm_bbox)
-    area_deg2 = _bbox_area_deg2(south, west, north, east)
+    area_deg2 = _osm_safety_shared.bbox_area_deg2(south, west, north, east)
 
-    if area_deg2 > float(settings.osm_hard_bbox_area_deg2):
-        raise RuntimeError(
-            "OSM bbox is too large for safe import. "
-            f"Area={area_deg2:.3f} deg^2 exceeds hard limit "
-            f"{float(settings.osm_hard_bbox_area_deg2):.3f} deg^2."
-        )
-
-    if area_deg2 > float(settings.osm_warn_bbox_area_deg2):
-        messages.append(
-            "BBox area is large and may trigger heavy OSM server load "
-            f"({area_deg2:.3f} deg^2)."
-        )
-
-    if int(settings.osm_max_features) == 0:
-        messages.append(
-            "Max Features is 0 (unbounded). This can pull a very large dataset."
-        )
-    elif int(settings.osm_max_features) > 10000:
-        messages.append(f"Max Features is high ({int(settings.osm_max_features)}).")
-
-    if settings.osm_query_mode == "CUSTOM":
-        messages.append(
-            "Custom Overpass query is enabled; server-side scope may exceed UI caps."
-        )
-
-    if int(settings.osm_timeout_seconds) > 120:
-        messages.append(
-            f"Timeout is high ({int(settings.osm_timeout_seconds)}s), "
-            "indicating potentially heavy queries."
-        )
-
-    return messages
+    return _osm_safety_shared.osm_preflight_messages(
+        area_deg2,
+        settings.osm_warn_bbox_area_deg2,
+        settings.osm_hard_bbox_area_deg2,
+        settings.osm_max_features,
+        settings.osm_query_mode == "CUSTOM",
+        settings.osm_timeout_seconds,
+    )
 
 
 def _parse_osm_tag_filters(raw_text):
@@ -1790,7 +1834,10 @@ def _fetch_osm_geojson_with_osmnx(settings):
         ) from exc
 
     south, west, north, east = _parse_osm_bbox(settings.osm_bbox)
-    print("SWNE", south, west, north, east)
+    print(
+        f"[Geo Wireframes] Fetching OSM features via osmnx: "
+        f"south={south}, west={west}, north={north}, east={east}"
+    )
     tags = _osm_tags_dict_from_filters(settings.osm_tag_filters)
     if not tags:
         tags = {"building": True}
@@ -1819,6 +1866,8 @@ def _fetch_osm_geojson_with_osmnx(settings):
 
     if gdf is None:
         raise RuntimeError(f"osmnx fetch failed: {fetch_error}") from fetch_error
+
+    print(f"[Geo Wireframes] osmnx fetch complete: {len(gdf)} feature(s).")
 
     if gdf.empty:
         return {
@@ -1871,6 +1920,7 @@ def _build_overpass_query_from_settings(settings):
 
 
 def _fetch_overpass_json(endpoint, query, timeout_seconds, max_response_bytes):
+    print(f"[Geo Wireframes] Fetching OSM data from Overpass endpoint {endpoint} ...")
     encoded = urllib.parse.urlencode({"data": query}).encode("utf-8")
     request = urllib.request.Request(
         endpoint,
@@ -1904,6 +1954,8 @@ def _fetch_overpass_json(endpoint, query, timeout_seconds, max_response_bytes):
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Overpass request failed: {exc}") from exc
 
+    print(f"[Geo Wireframes] Overpass fetch complete ({total} bytes).")
+
     try:
         return json.loads(content)
     except Exception as exc:
@@ -1919,13 +1971,18 @@ def _convert_overpass_to_geojson(overpass_json):
             "environment to enable OSM conversion."
         ) from exc
 
+    elements = overpass_json.get("elements", []) if isinstance(overpass_json, dict) else []
+    print(f"[Geo Wireframes] Converting {len(elements)} OSM element(s) to GeoJSON...")
     try:
-        return osm2geojson.json2geojson(overpass_json)
+        geojson = osm2geojson.json2geojson(overpass_json)
     except Exception as exc:
         raise RuntimeError(f"Failed converting OSM JSON to GeoJSON: {exc}") from exc
+    print(f"[Geo Wireframes] Conversion complete: {len(geojson.get('features', []))} GeoJSON feature(s).")
+    return geojson
 
 
 def _download_url_to_temp_file(url, timeout_seconds, max_bytes):
+    print(f"[Geo Wireframes] Downloading imagery from {url} ...")
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "BlenderGeoWireframes/1.0"},
@@ -1956,6 +2013,7 @@ def _download_url_to_temp_file(url, timeout_seconds, max_bytes):
             pass
         raise
 
+    print(f"[Geo Wireframes] Download complete ({written / (1024 * 1024):.1f} MB).")
     return temp_path
 
 
@@ -2100,6 +2158,7 @@ def _normalize_image_array(array):
 
 
 def _convert_raster_to_png(source_path, max_size=4096):
+    print(f"[Geo Wireframes] Converting raster imagery to PNG: {source_path} ...")
     try:
         import numpy as np
         import rasterio
@@ -2137,6 +2196,7 @@ def _convert_raster_to_png(source_path, max_size=4096):
     except Exception as exc:
         raise RuntimeError(f"Could not save converted raster image: {exc}") from exc
 
+    print(f"[Geo Wireframes] Raster conversion complete: {target_path}")
     return target_path
 
 

@@ -32,11 +32,25 @@ def build(tree, params):
         evaluated = source_obj.evaluated_get(depgraph)
         curve_data = evaluated.data
 
-        if attr_name and source_obj.data.attributes.get(attr_name):
-            attr = source_obj.data.attributes[attr_name]
+        # Read from curve_data (the evaluated, post-modifier data), not
+        # source_obj.data (pre-modifier) - matching the fallback branch
+        # below, which already samples curve_data.splines.
+        if attr_name and curve_data.attributes.get(attr_name):
+            attr = curve_data.attributes[attr_name]
             if attr.domain == "POINT":
                 values = [attr.data[i].value for i in range(len(attr.data))]
+            else:
+                print(
+                    f"[attribute_curve_map] Attribute '{attr_name}' on "
+                    f"'{source_obj.name}' is domain {attr.domain}, not POINT - "
+                    f"ignoring it (no values will be sampled from it)"
+                )
         else:
+            if attr_name:
+                print(
+                    f"[attribute_curve_map] Attribute '{attr_name}' not found on "
+                    f"'{source_obj.name}' (evaluated) - falling back to Y coordinates"
+                )
             for spline in curve_data.splines:
                 if spline.type == "BEZIER":
                     for pt in spline.bezier_points:
@@ -78,5 +92,13 @@ def build(tree, params):
     points.remove(points[0])
     mapping.update()
 
-    tree.link(geometry, float_curve.inputs[0])
-    tree.link(float_curve.outputs[0], tree.outputs.geometry("Output"))
+    # Geometry itself has no "value" to remap through a Float Curve - only
+    # per-point/attribute VALUES do, and this node group's only runtime data
+    # channel is Geometry (there's no separate scalar in/out socket to carry
+    # a remapped value). So Geometry passes straight through unchanged, same
+    # as the no-data fallback above; `float_curve` is built purely as a
+    # standalone, visually-editable LUT baked from source_obj's sampled
+    # values (Y coordinates, or `attr_name`'s POINT values), left unconnected
+    # for you to wire by hand to whatever scalar you actually want remapped
+    # (e.g. a Sample Curve factor, a Map Range, ...) in the node editor.
+    tree.outputs.geometry("Output") >> geometry

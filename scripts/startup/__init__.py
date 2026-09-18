@@ -1,4 +1,4 @@
-from . import chezmoi_sync
+from . import _chezmoi_sync_shim as chezmoi_sync
 from . import geo_coord
 from . import country_wireframes
 from . import get_extension_keys
@@ -44,6 +44,8 @@ def register():
 
 def unregister():
     # Allow safe unregistering if needed
+    if bpy.app.timers.is_registered(ppm1d_nodebpy.build_ppm_tree):
+        bpy.app.timers.unregister(ppm1d_nodebpy.build_ppm_tree)
     chezmoi_sync.unregister()
     geo_coord.unregister()
     country_wireframes.unregister()

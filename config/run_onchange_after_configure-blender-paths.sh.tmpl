@@ -1,0 +1,38 @@
+#!/bin/bash
+
+# REFERENCE COPY - NOT LIVE. chezmoi executes its own copy of this file
+# from ~/.local/share/chezmoi/run_onchange_after_configure-blender-paths.sh.tmpl
+# (the chezmoi *source* directory, unrelated to this repo) - nothing in
+# this repo reads or runs this file directly. It's kept here purely as a
+# documented reference for cli/_startup_loader.py and
+# scripts/startup/_chezmoi_sync_shim.py, both of which cite it by name to
+# explain why "chezmoi" was historically significant as a symlink name
+# (see their own comments). If you change the real chezmoi-managed
+# version, update this copy to match by hand - it will NOT happen
+# automatically, the same as config.json.tmpl/example.config.json in this
+# same directory - see config/README.md.
+
+BLENDER_DIR="{{ .blender.blender_dir }}"
+GENERIC_STARTUP="$HOME/.config/blender/blender-config/scripts/startup"
+
+# Ensure our generic repository source directory path exists
+mkdir -p "$GENERIC_STARTUP"
+
+# Loop through any version-specific folders Steam/Blender has initialized
+for version_dir in "$BLENDER_DIR"/[0-9].*; do
+    if [ -d "$version_dir" ]; then
+        TARGET_STARTUP_DIR="$version_dir/scripts/startup"
+
+        # Ensure the native startup folder exists safely
+        mkdir -p "$TARGET_STARTUP_DIR"
+
+        # Create a targeted symlink for JUST our chezmoi folder inside it
+        if [ ! -L "$TARGET_STARTUP_DIR/chezmoi" ]; then
+            # Clean up if a legacy broken symlink or accidental file exists there
+            rm -f "$TARGET_STARTUP_DIR/chezmoi"
+
+            ln -s "$GENERIC_STARTUP" "$TARGET_STARTUP_DIR/chezmoi"
+            echo "🔗 Safely nested chezmoi startup tracking into: $TARGET_STARTUP_DIR/chezmoi"
+        fi
+    fi
+done

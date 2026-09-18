@@ -274,7 +274,7 @@ def execute(context, params):
     for ob in scene.objects:
         if ob.type not in {"MESH", "CURVE", "SURFACE", "META", "FONT"}:
             continue
-        if not ob.visible_get() and ob.hide_render:
+        if ob.hide_render:
             continue
         try:
             ev = ob.evaluated_get(depsgraph)
@@ -294,16 +294,18 @@ def execute(context, params):
             note += f" subdiv r{subd.render_levels}/v{subd.levels}"
         if any(m.type == "DISPLACE" for m in ob.modifiers):
             note += " DISPLACE"
-        rows.append((tris, ob.name, ",".join(mods), note, ob.hide_render))
+        # No hide_render tag here - objects with hide_render=True are now
+        # skipped above, before this point, so every row that reaches here
+        # is actually rendered (see the loop's entry guard above).
+        rows.append((tris, ob.name, ",".join(mods), note))
         ev.to_mesh_clear()
 
     rows.sort(reverse=True)
     print(f"  Scene total (render-evaluated): {total_tris:,} tris\n")
     print(f"  {'tris':>12}  {'%':>5}  name / modifiers")
-    for tris, name, mods, note, hidden in rows[:15]:
+    for tris, name, mods, note in rows[:15]:
         pct = (tris / total_tris * 100) if total_tris else 0
-        tag = " [hidden in render]" if hidden else ""
-        print(f"  {tris:>12,}  {pct:>4.1f}%  {name}{tag}")
+        print(f"  {tris:>12,}  {pct:>4.1f}%  {name}")
         if mods or note:
             print(f"                       [{mods}]{note}")
 
