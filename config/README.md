@@ -62,7 +62,7 @@ Every top-level key is optional - omit anything you don't want managed.
 |---|---|---|
 | `interface_scale` | `preferences.view.ui_scale` | Applied separately from the rest of `view` below. |
 | `render_device_type` | `preferences.addons['cycles'].preferences.compute_device_type` | One of Blender's real enum values: `NONE`, `CUDA`, `OPTIX`, `HIP`, `METAL`, `ONEAPI` - **all caps**, no mixed-case variants. Validated against the live enum at apply time; an invalid value warns and skips (doesn't block anything else). |
-| `theme` | `preferences.themes` | A bundled or user interface theme preset, matched by display name (e.g. `"Deep Grey"`) against Blender's installed theme presets by filename. Missing preset warns and skips. |
+| `theme` | `preferences.themes` | A bundled or user interface theme preset, matched by display name (e.g. `"Blender Dark"`, `"Gruvbox Dark"`) against every `*.xml` under `bpy.utils.preset_paths("interface_theme")`, via `bpy.path.display_name()` on each filename. Missing preset warns and skips. See `themes/README.md` for checking a bare theme `.xml` (no `blender_manifest.toml`, so it can never be a real Extensions-platform package) into this repo so it's available on every machine without a manual install step. |
 | `input` | `preferences.inputs` | e.g. `select_mouse`, `view_rotate_method`, `use_zoom_to_mouse`. |
 | `filepaths` | `preferences.filepaths` | Direct passthrough. |
 | `view` | `preferences.view` | e.g. `show_developer_ui`, `show_tooltips_python`. |
@@ -85,3 +85,19 @@ other row above is a nested object.
   `compute_device_type`'s real enum at apply time; in at least one headless/background
   session this came back as an empty list (fails safe - warns and skips - but the device
   type then never gets applied in that session either).
+
+## Fixed 2026-09-18: `theme` never actually matched anything
+
+`_apply_theme_preset()` used to build `<name>.lower().replace(" ", "_") + ".py"` and look
+for that exact file. Verified directly against a real Blender install: every interface
+theme preset that exists - the two bundled with the application itself
+(`Blender_Dark.xml`, `Blender_Light.xml`) and a real theme installed from a downloaded
+extension (`Gruvbox_Dark.xml`) - is `.xml`, never `.py` (`USERPREF_MT_interface_theme_presets`
+declares `preset_type = 'XML'` in Blender's own source), and keeps its original case
+(`Blender_Dark.xml`, not `blender_dark.xml`). Both of those made the old lookup fail
+every time, on every machine, silently (`os.path.exists()` on the constructed filename
+was always `False`, so it fell straight through to "Theme preset not found" - the kind of
+failure this sync system's own "fails soft" design specifically doesn't surface as an
+error). Fixed to match via `bpy.path.display_name()` on every real `.xml` file found,
+case-insensitively - Blender's own filename<->display-name convention, not a hand-rolled
+guess at it.

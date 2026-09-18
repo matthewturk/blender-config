@@ -141,16 +141,51 @@ def _apply_render_device_type(cprefs, device_type):
 
 
 def _apply_theme_preset(theme_name):
-    """Apply a bundled or user interface theme preset by its display name."""
+    """Apply a bundled or user interface theme preset by its display name -
+    the same name Preferences > Themes > Presets shows in its dropdown,
+    e.g. "Blender Dark" or "Gruvbox Dark".
+
+    Matches by computing bpy.path.display_name() on every *.xml file found
+    across bpy.utils.preset_paths("interface_theme") and comparing
+    case-insensitively. Both of those choices were verified necessary, not
+    stylistic - this function's previous version built
+    `<name>.lower().replace(" ", "_") + ".py"` and could never match
+    anything, on any machine, ever:
+
+    - Every interface theme preset Blender ships or accepts turned out to
+      be .xml, never .py - checked directly: the two themes bundled with
+      the application itself (Blender_Dark.xml, Blender_Light.xml) and a
+      real theme installed from a downloaded extension
+      (Gruvbox_Dark.xml). USERPREF_MT_interface_theme_presets (the exact
+      menu this function drives via execute_preset) declares
+      `preset_type = 'XML'` in Blender's own source - there was never a
+      .py variant to find.
+    - Real preset filenames keep their original case
+      (Blender_Dark.xml, not blender_dark.xml) - the old `.lower()` call
+      on the CONSTRUCTED filename would have kept missing even a
+      correctly-.xml-suffixed guess. bpy.path.display_name() is Blender's
+      own filename<->display-name convention (verified:
+      display_name("Blender_Dark.xml") == "Blender Dark"), so matching
+      through it rather than re-deriving a filename by hand can't drift
+      from whatever convention Blender itself actually uses.
+    """
     if not theme_name:
         return
-    target_filename = theme_name.strip().lower().replace(" ", "_") + ".py"
+    theme_name_lower = theme_name.strip().lower()
     for preset_dir in bpy.utils.preset_paths("interface_theme"):
-        candidate = os.path.join(preset_dir, target_filename)
-        if os.path.exists(candidate):
+        try:
+            filenames = sorted(os.listdir(preset_dir))
+        except OSError:
+            continue
+        for filename in filenames:
+            if not filename.lower().endswith(".xml"):
+                continue
+            if bpy.path.display_name(filename).lower() != theme_name_lower:
+                continue
+            filepath = os.path.join(preset_dir, filename)
             try:
                 bpy.ops.script.execute_preset(
-                    filepath=candidate,
+                    filepath=filepath,
                     menu_idname="USERPREF_MT_interface_theme_presets",
                 )
                 print(f"[Chezmoi/Preferences] Applied theme preset: {theme_name}")
@@ -158,6 +193,63 @@ def _apply_theme_preset(theme_name):
                 print(f"[Chezmoi/Preferences Error] Failed to apply theme '{theme_name}': {e}")
             return
     print(f"[Chezmoi/Preferences Warning] Theme preset not found: {theme_name}")
+
+
+def _sync_repo_theme_presets(project_dir):
+    """Copy every *.xml theme preset checked into config/themes/ (this
+    repo's own git-tracked copies) into this machine's real interface
+    theme presets directory, so a bare theme .xml - one with no
+    blender_manifest.toml, and therefore one that can NEVER become a real
+    Extensions-platform package with its own ID (Blender's own
+    "Install Theme..." button does exactly this same copy, into this same
+    folder - a raw file drop is the entire mechanism, no ID involved
+    either way) - only needs to be placed here once, in git, rather than
+    re-installed by hand on every machine.
+
+    Runs unconditionally, not gated on config.json existing or a "theme"
+    key being set: keeping this folder's checked-in themes present and
+    current is independent of which theme happens to be ACTIVE this
+    session - a theme picked by hand afterward in Preferences should
+    still find the git-tracked variant already sitting there.
+
+    Only copies when the destination is missing or its bytes differ from
+    the checked-in version, so this doesn't touch the presets directory
+    (or print anything) on every single Blender launch once already in
+    sync.
+    """
+    themes_dir = os.path.join(project_dir, "config", "themes")
+    if not os.path.isdir(themes_dir):
+        return
+
+    dest_dir = bpy.utils.user_resource(
+        "SCRIPTS", path=os.path.join("presets", "interface_theme"), create=True
+    )
+    if not dest_dir:
+        print(
+            "[Chezmoi/Preferences Warning] Could not resolve the user "
+            "interface_theme presets directory - skipping config/themes/ sync"
+        )
+        return
+
+    for filename in sorted(os.listdir(themes_dir)):
+        if not filename.lower().endswith(".xml"):
+            continue
+        src = os.path.join(themes_dir, filename)
+        dst = os.path.join(dest_dir, filename)
+        try:
+            with open(src, "rb") as f:
+                src_bytes = f.read()
+            if os.path.exists(dst):
+                with open(dst, "rb") as f:
+                    if f.read() == src_bytes:
+                        continue
+            shutil.copyfile(src, dst)
+            print(f"[Chezmoi/Preferences] Synced theme preset from repo: {filename}")
+        except OSError as e:
+            print(
+                f"[Chezmoi/Preferences Warning] Failed to sync theme "
+                f"preset '{filename}': {e}"
+            )
 
 
 def _resolve_addon_module(addons_by_name, addon_key):
@@ -194,6 +286,11 @@ def load_and_sync_chezmoi(dummy=None):
     # repo directly).
     project_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
     config_path = os.path.expanduser("~/.config/blender/config.json")
+
+    # Runs before, and independently of, config.json below - see
+    # _sync_repo_theme_presets's own docstring for why this isn't gated on
+    # a "theme" key being set.
+    _sync_repo_theme_presets(project_dir)
 
     # -------------------------------------------------------------------------
     # PART 1: Apply Plain-Text Preferences (UI Scale, Render Devices)
@@ -240,18 +337,25 @@ def load_and_sync_chezmoi(dummy=None):
         )
         return
 
-    # Dynamically attach venv path matching active Python major.minor version
+    # Dynamically attach venv path matching active Python major.minor version.
+    # Inserted at index 0, not appended - see the matching, more detailed
+    # comment on this same choice in scripts/startup/flat_gis_importer.py's
+    # _ensure_venv(): a real, confirmed conflict exists between this venv's
+    # own polars[rtcompat]/databpy and older copies of both that the "CSV
+    # Importer" extension bundles into Blender's own shared
+    # extensions/.local/.../site-packages pool and puts on sys.path too -
+    # appending left it to load order, nondeterministically, which one won.
     py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
     uv_venv = os.path.join(
         project_dir, ".venv", "lib", f"python{py_version}", "site-packages"
     )
-    if os.path.exists(uv_venv) and uv_venv not in sys.path:
-        sys.path.append(uv_venv)
+    if os.path.exists(uv_venv) and sys.path[:1] != [uv_venv]:
+        if uv_venv in sys.path:
+            sys.path.remove(uv_venv)
+        sys.path.insert(0, uv_venv)
         print(
-            f"[Chezmoi/uv] Dynamically attached venv environment for Python {py_version}"
-        )
-        print(
-            f"[Chezmoi/uv] That path is {uv_venv}"
+            f"[Chezmoi/uv] Dynamically attached venv environment for Python "
+            f"{py_version} (priority): {uv_venv}"
         )
 
     try:

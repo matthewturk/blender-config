@@ -39,14 +39,32 @@ def _ensure_venv():
         os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..")
     )
 
+    # Inserted at index 0, not appended: this repo's own scripts (this one
+    # included) need THIS venv's package versions to win over whatever an
+    # unrelated, already-enabled Blender extension bundled into its own
+    # `extensions/.local/lib/.../site-packages` and put on sys.path first -
+    # confirmed a live, real conflict, not a hypothetical one: the "CSV
+    # Importer" extension bundles its own polars 1.42.1 + polars_runtime_32
+    # + databpy 0.6.2 as wheels, which Blender's extension system installs
+    # into that shared pool and re-syncs onto sys.path whenever the
+    # extension is enabled - simultaneously with this repo's own newer
+    # polars[rtcompat] 1.44.2 + databpy 0.7.0 from THIS venv, previously
+    # only ever appended (so whichever loaded first silently won,
+    # nondeterministically) - see the matching comment in
+    # config/chezmoi_sync.py's own copy of this same venv-bridging logic.
     lib_dir = os.path.join(project_dir, ".venv", "lib")
     if os.path.exists(lib_dir):
         for item in os.listdir(lib_dir):
             if item.startswith("python"):
                 site_pkgs = os.path.join(lib_dir, item, "site-packages")
-                if os.path.exists(site_pkgs) and site_pkgs not in sys.path:
-                    sys.path.append(site_pkgs)
-                    print(f"[FlatGIS] Dynamically attached site-packages: {site_pkgs}")
+                if not os.path.exists(site_pkgs):
+                    continue
+                if sys.path[:1] == [site_pkgs]:
+                    continue  # Already winning - stay quiet on repeat calls.
+                if site_pkgs in sys.path:
+                    sys.path.remove(site_pkgs)
+                sys.path.insert(0, site_pkgs)
+                print(f"[FlatGIS] Dynamically attached site-packages (priority): {site_pkgs}")
 
 # Run ensure_venv immediately on module load
 _ensure_venv()
