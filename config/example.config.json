@@ -13,6 +13,9 @@
     "show_developer_ui": true,
     "show_tooltips_python": true
   },
+  "filepaths": {
+    "font_directory": "/home/example/.local/share/fonts/blender-managed/"
+  },
   "edit": {
     "undo_steps": 64,
     "undo_memory_limit": 512
