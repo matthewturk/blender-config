@@ -63,7 +63,7 @@ Every top-level key is optional - omit anything you don't want managed.
 | `interface_scale` | `preferences.view.ui_scale` | Applied separately from the rest of `view` below. |
 | `render_device_type` | `preferences.addons['cycles'].preferences.compute_device_type` | One of Blender's real enum values: `NONE`, `CUDA`, `OPTIX`, `HIP`, `METAL`, `ONEAPI` - **all caps**, no mixed-case variants. Validated against the live enum at apply time; an invalid value warns and skips (doesn't block anything else). |
 | `theme` | `preferences.themes` | A bundled or user interface theme preset, matched by display name (e.g. `"Blender Dark"`, `"Gruvbox Dark"`) against every `*.xml` under `bpy.utils.preset_paths("interface_theme")`, via `bpy.path.display_name()` on each filename. Missing preset warns and skips. See `themes/README.md` for checking a bare theme `.xml` (no `blender_manifest.toml`, so it can never be a real Extensions-platform package) into this repo so it's available on every machine without a manual install step. |
-| `input` | `preferences.inputs` | e.g. `select_mouse`, `view_rotate_method`, `use_zoom_to_mouse`. |
+| `input` | `preferences.inputs` | e.g. `select_mouse`, `view_rotate_method`, `use_zoom_to_mouse`. NDOF/3D-mouse settings (`ndof_sensitivity`, `ndof_deadzone`, every other `ndof_*` property) live on this same object and work exactly the same way - see "NDOF/3D-mouse settings" below before copying property names from anywhere other than your own Blender. |
 | `filepaths` | `preferences.filepaths` | Direct passthrough - e.g. `font_directory` (verified: "the default directory to search for loading fonts", i.e. where the Open Font file browser starts). For fonts you want always available without a manual per-machine install step: have chezmoi download them (its own `.chezmoiexternal.toml` file/archive externals - not something this repo's own `config/` module touches, same as `config.json.tmpl` itself per the note above) into one stable directory, then point `font_directory` at it here. No Blender-side "install" concept exists for fonts at all - confirmed `bpy.utils.user_resource('FONTS', ...)` isn't even a valid resource type; a font is just referenced by plain path wherever it lives. `preferences.view.font_path_ui`/`font_path_ui_mono` (Blender's own interface/monospace font, under the `view` key below) work the same way. |
 | `view` | `preferences.view` | e.g. `show_developer_ui`, `show_tooltips_python`. |
 | `edit` | `preferences.edit` | e.g. `undo_steps`, `undo_memory_limit`. |
@@ -76,6 +76,35 @@ Every top-level key is optional - omit anything you don't want managed.
 
 `interface_scale`/`render_device_type`/`theme` are flat top-level keys (not nested); every
 other row above is a nested object.
+
+## NDOF/3D-mouse settings
+
+`_apply_property_map()` (what `chezmoi_sync.py` uses for `input`, among other sections) is a
+fully generic `setattr` passthrough - it applies whatever keys you put under `input` directly
+onto `preferences.inputs`, with no curated allow-list. Since every NDOF/3D-mouse setting
+(`ndof_sensitivity`, `ndof_deadzone`, `ndof_lock_horizon`, `ndof_fly_helicopter`, ...) also
+lives on `preferences.inputs`, they already work under `input` with no code changes needed -
+this was true before anyone had asked for it, it just wasn't documented.
+
+The exact property names aren't given here as a fixed list: this repo's own headless `bpy`
+(used to verify everything else in this file) was built **without** NDOF support compiled in
+(`bpy.app.build_options.input_ndof` is `False` in it) - checked directly, not assumed - so
+there was no way to confirm spellings against it the way every other row above was confirmed.
+Rather than copy names from memory into a config file whose whole point is being a trustworthy
+example, generate the real list directly from a Blender that actually has NDOF support (your
+own machine, with a 3D mouse driver installed) - Scripting tab, or the Python console:
+
+```python
+import json
+inputs = bpy.context.preferences.inputs
+ndof = {p.identifier: getattr(inputs, p.identifier)
+        for p in inputs.bl_rna.properties if p.identifier.startswith("ndof_")}
+print(json.dumps(ndof, indent=2))
+```
+
+That prints every `ndof_*` property this Blender build actually has, with your current
+values - trim it to whichever ones you actually want managed and paste the result straight
+into `config.json`'s `input` section.
 
 ## Known gaps (as of 2026-09)
 

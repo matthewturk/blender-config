@@ -24,4 +24,8 @@ dependencies = [
     "bpy>=5.2.2",
     "usd-core>=26.8",
     "polars[rtcompat]>=1.44.2",
+    "yt-idv",
 ]
+
+[tool.uv.sources]
+yt-idv = { path = "/home/mturk/yt/cycles-yt/yt_idv" }
