@@ -3,6 +3,7 @@ import addon_utils
 import json
 import os
 import shutil
+import site
 import subprocess
 import threading
 import sys
@@ -357,6 +358,13 @@ def load_and_sync_chezmoi(dummy=None):
             f"[Chezmoi/uv] Dynamically attached venv environment for Python "
             f"{py_version} (priority): {uv_venv}"
         )
+    # A bare sys.path entry skips .pth processing, which is how uv editable
+    # installs (__editable__.*.pth finder hooks) get onto the import path.
+    # addsitedir() runs them without re-appending the already-present dir, and
+    # is idempotent - kept outside the guard above because flat_gis_importer's
+    # _ensure_venv() may have already put this dir first.
+    if os.path.exists(uv_venv):
+        site.addsitedir(uv_venv)
 
     try:
         check = subprocess.run(

@@ -1,5 +1,6 @@
 import sys
 import os
+import site
 import math
 import json
 import re
@@ -59,6 +60,9 @@ def _ensure_venv():
                 site_pkgs = os.path.join(lib_dir, item, "site-packages")
                 if not os.path.exists(site_pkgs):
                     continue
+                # Run .pth hooks (uv editable installs); idempotent, so done
+                # even when the dir is already first. See chezmoi_sync.py.
+                site.addsitedir(site_pkgs)
                 if sys.path[:1] == [site_pkgs]:
                     continue  # Already winning - stay quiet on repeat calls.
                 if site_pkgs in sys.path:
