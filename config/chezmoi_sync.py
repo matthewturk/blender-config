@@ -375,9 +375,10 @@ def load_and_sync_chezmoi(dummy=None):
             UV_STATUS = "NEEDS_SYNC"
 
             # Display a quick non-blocking native alert popup box
-            bpy.context.window_manager.popup_menu(
-                draw_popup, title="Environment Sync", icon="URL"
-            )
+            if not bpy.app.background:
+                bpy.context.window_manager.popup_menu(
+                    draw_popup, title="Environment Sync", icon="URL"
+                )
 
             # Spin up background process so the viewport doesn't freeze
             threading.Thread(
