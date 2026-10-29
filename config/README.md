@@ -79,6 +79,11 @@ Every top-level key is optional - omit anything you don't want managed.
 `interface_scale`/`render_device_type`/`theme` are flat top-level keys (not nested); every
 other row above is a nested object.
 
+No key needed: when the Script Runner extension is enabled, sync adds this repo's
+`scripts/startup/user_scripts` (Scripts) and `scripts/startup/node_scripts` (Node Scripts) to
+its folder list if they're missing, since that list starts empty on every fresh install.
+Folders you add by hand are left alone.
+
 ## NDOF/3D-mouse settings
 
 `_apply_property_map()` (what `chezmoi_sync.py` uses for `input`, among other sections) is a

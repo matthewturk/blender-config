@@ -73,6 +73,39 @@ def _extension_installed(pkg_id):
     )
 
 
+def _ensure_script_runner_folders(project_dir):
+    """Point the Script Runner extension at this repo's user_scripts/ and
+    node_scripts/, adding whichever entry is missing from its folder list
+    (which starts empty on every fresh install)."""
+    module = next(
+        (name for name in bpy.context.preferences.addons.keys()
+         if _module_matches_package(name, "script_runner")),
+        None,
+    )
+    if module is None:
+        return
+    folders = bpy.context.preferences.addons[module].preferences.folders
+    startup_dir = os.path.join(project_dir, "scripts", "startup")
+    added = False
+    for subdir, kind in (("user_scripts", "SCRIPTS"), ("node_scripts", "NODES")):
+        path = os.path.join(startup_dir, subdir)
+        if not os.path.isdir(path):
+            continue
+        if any(
+            entry.kind == kind and entry.path
+            and os.path.realpath(bpy.path.abspath(entry.path)) == os.path.realpath(path)
+            for entry in folders
+        ):
+            continue
+        entry = folders.add()
+        entry.path = path
+        entry.kind = kind
+        added = True
+        print(f"[Chezmoi/Extensions] Added Script Runner folder ({kind}): {path}")
+    if added:
+        bpy.ops.wm.save_userpref()
+
+
 def _ensure_extension_repos(entries):
     """Add each remote extension repository that isn't configured yet, matched
     by URL. Entries are URLs or {"name": ..., "url": ...}; without a name, the
@@ -737,6 +770,8 @@ def load_and_sync_chezmoi(dummy=None):
             print(
                 "[Chezmoi/Extensions] All specified extensions are already installed and active."
             )
+
+    _ensure_script_runner_folders(project_dir)
 
 
 def _find_uv():
