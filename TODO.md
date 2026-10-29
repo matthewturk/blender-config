@@ -56,7 +56,6 @@ All 55 managed assets, plus the IGUIDE trade CSVs and `CountryData.h5` (now in `
 - [ ] Install Script Runner from its GitHub release (`dynamic_script_runner.py` has been removed from this repo).
 - [ ] Install Adaptive Viewport Clipping from `~/dev/blender-viewport-clipping` (`viewport_switch.py` has been removed from this repo).
 - [ ] Publish AVL GeoViz: create the GitHub repo, push, tag `v1.0.0` (needs d3blender public). Its GIS modules are no longer registered from this repo's startup.
-- [ ] Decide whether `cli/geojson_export.py` should keep using this repo's unregistered copies of `geo_coord.py`/`country_wireframes.py` (they'll drift from AVL GeoViz's) or load AVL GeoViz's source instead.
 - [ ] In Script Runner's preferences, add `scripts/startup/user_scripts` (Scripts) and `scripts/startup/node_scripts` (Node Scripts) from this repo.
 
 ## Sharing with a team (later)

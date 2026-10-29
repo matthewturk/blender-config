@@ -63,6 +63,62 @@ def _module_matches_package(module_name, pkg_id):
     return module_name == pkg_id or module_name.endswith(f".{pkg_id}")
 
 
+def _extension_installed(pkg_id):
+    """Whether pkg_id is installed in any enabled extension repository.
+    Theme extensions never appear among add-ons, so this checks for the
+    package's folder (<repo dir>/<pkg_id>) instead."""
+    return any(
+        repo.enabled and os.path.isdir(os.path.join(repo.directory, pkg_id))
+        for repo in bpy.context.preferences.extensions.repos
+    )
+
+
+def _ensure_extension_repos(entries):
+    """Add each remote extension repository that isn't configured yet, matched
+    by URL. Entries are URLs or {"name": ..., "url": ...}; without a name, the
+    URL's last folder is used (.../avl-blender-extensions/index.json ->
+    avl-blender-extensions)."""
+    repos = bpy.context.preferences.extensions.repos
+    added = False
+    for entry in entries:
+        if isinstance(entry, str):
+            entry = {"url": entry}
+        url = entry.get("url")
+        if not url:
+            print(f"[Chezmoi/Extensions Warning] Repository entry without a url: {entry}")
+            continue
+        if any(repo.remote_url == url for repo in repos):
+            continue
+        name = entry.get("name") or url.rstrip("/").rsplit("/", 2)[-2]
+        try:
+            bpy.ops.preferences.extension_repo_add(
+                name=name, remote_url=url, use_sync_on_startup=True, type="REMOTE"
+            )
+            added = True
+            print(f"[Chezmoi/Extensions] Added extension repository: {name} -> {url}")
+        except Exception as e:
+            print(f"[Chezmoi/Extensions Error] Failed to add repository {url}: {e}")
+    if added:
+        bpy.ops.wm.save_userpref()
+
+
+def _remote_repo_index_for(pkg_id):
+    """Index of the first enabled remote repository whose synced listing
+    (<repo dir>/.blender_ext/index.json, written by repo_sync) has pkg_id."""
+    for index, repo in enumerate(bpy.context.preferences.extensions.repos):
+        if not (repo.enabled and repo.use_remote_url):
+            continue
+        listing = os.path.join(repo.directory, ".blender_ext", "index.json")
+        try:
+            with open(listing) as f:
+                packages = json.load(f).get("data", [])
+        except (OSError, ValueError):
+            continue
+        if any(pkg.get("id") == pkg_id for pkg in packages):
+            return index
+    return None
+
+
 def _apply_property_map(target, values, label):
     """Apply a dict of properties onto a Blender RNA object defensively."""
     if not isinstance(values, dict):
@@ -173,7 +229,16 @@ def _apply_theme_preset(theme_name):
     if not theme_name:
         return
     theme_name_lower = theme_name.strip().lower()
-    for preset_dir in bpy.utils.preset_paths("interface_theme"):
+    # Theme extensions keep their .xml in <repo dir>/<package id>/, which
+    # preset_paths() doesn't include.
+    theme_dirs = list(bpy.utils.preset_paths("interface_theme"))
+    for repo in bpy.context.preferences.extensions.repos:
+        if repo.enabled and os.path.isdir(repo.directory):
+            theme_dirs += sorted(
+                entry.path for entry in os.scandir(repo.directory)
+                if entry.is_dir() and not entry.name.startswith(".")
+            )
+    for preset_dir in theme_dirs:
         try:
             filenames = sorted(os.listdir(preset_dir))
         except OSError:
@@ -322,13 +387,7 @@ def load_and_sync_chezmoi(dummy=None):
     # PART 2: Resolve Path & Verify Python Environment Sync via uv
     # -------------------------------------------------------------------------
     # Dynamically find uv executable in system PATH
-    uv_bin = shutil.which("uv")
-
-    # GUI Application Fallback (if Steam clears your shell variables)
-    if not uv_bin:
-        fallback = os.path.expanduser("~/.local/bin/uv")
-        if os.path.exists(fallback):
-            uv_bin = fallback
+    uv_bin = _find_uv()
 
     if not uv_bin:
         print(
@@ -575,6 +634,9 @@ def load_and_sync_chezmoi(dummy=None):
     # -------------------------------------------------------------------------
     # PART 4: Automated Extension/Add-on Synchronization (Blender 4.2+)
     # -------------------------------------------------------------------------
+    if config.get("extension_repositories"):
+        _ensure_extension_repos(config["extension_repositories"])
+
     if "extensions" in config and config["extensions"]:
         enabled_addons = set(bpy.context.preferences.addons.keys())
         available_modules = {mod.__name__ for mod in addon_utils.modules()}
@@ -608,10 +670,16 @@ def load_and_sync_chezmoi(dummy=None):
                     )
 
             # Truly missing package, queue for installation from extension repos.
-            if not disabled_match:
+            # Theme extensions aren't add-ons, so they only show up as a folder.
+            if not disabled_match and not _extension_installed(pkg_id):
                 missing_extensions.append(pkg_id)
 
-        if missing_extensions:
+        if missing_extensions and not bpy.app.online_access:
+            print(
+                f"[Chezmoi/Extensions Warning] Can't install {', '.join(missing_extensions)}: "
+                "online access is off (Preferences > System > Network > Allow Online Access)."
+            )
+        elif missing_extensions:
             print(
                 f"[Chezmoi/Extensions] Found {len(missing_extensions)} missing extensions. Synchronizing repositories..."
             )
@@ -619,19 +687,35 @@ def load_and_sync_chezmoi(dummy=None):
                 # 1. Force Blender to refresh its remote repository cache indices
                 bpy.ops.extensions.repo_sync_all()
 
-                # 2. Iterate and download the missing packages from the default store (repo_index=0)
+                # 2. Download each missing package from the first remote repository that lists it
                 for pkg_id in missing_extensions:
+                    repo_index = _remote_repo_index_for(pkg_id)
+                    if repo_index is None:
+                        print(
+                            f"[Chezmoi/Extensions Warning] No enabled remote repository lists: {pkg_id}"
+                        )
+                        continue
+                    repo = bpy.context.preferences.extensions.repos[repo_index]
                     print(
-                        f"[Chezmoi/Extensions] Downloading and enabling extension: {pkg_id}"
+                        f"[Chezmoi/Extensions] Downloading and enabling extension: {pkg_id} (from {repo.name})"
                     )
-                    bpy.ops.extensions.package_install(
-                        repo_index=0, pkg_id=pkg_id, enable_on_install=True
-                    )
+                    try:
+                        bpy.ops.extensions.package_install(
+                            repo_directory=repo.directory,
+                            repo_index=repo_index,
+                            pkg_id=pkg_id,
+                            enable_on_install=True,
+                        )
+                    except Exception as e:
+                        print(
+                            f"[Chezmoi/Extensions Error] Failed to install {pkg_id}: {e}"
+                        )
+                        continue
 
                     # Validate install/enable result to avoid silent repeated reinstall attempts.
                     available_modules = {mod.__name__ for mod in addon_utils.modules()}
                     enabled_addons = set(bpy.context.preferences.addons.keys())
-                    if not any(
+                    if not _extension_installed(pkg_id) and not any(
                         _module_matches_package(name, pkg_id)
                         for name in available_modules | enabled_addons
                     ):
@@ -639,7 +723,12 @@ def load_and_sync_chezmoi(dummy=None):
                             f"[Chezmoi/Extensions Warning] Package was requested but still unavailable: {pkg_id}"
                         )
 
-                # 3. Commit preferences changes to disk persistently
+                # 3. The theme was applied before any theme extension was
+                # installed, so apply it again in case it just arrived.
+                if config.get("theme"):
+                    _apply_theme_preset(config["theme"])
+
+                # 4. Commit preferences changes to disk persistently
                 bpy.ops.wm.save_userpref()
                 print("[Chezmoi/Extensions] All extensions synchronized successfully.")
             except Exception as e:
@@ -650,7 +739,80 @@ def load_and_sync_chezmoi(dummy=None):
             )
 
 
+def _find_uv():
+    # GUI Application Fallback (if Steam clears your shell variables)
+    uv_bin = shutil.which("uv")
+    fallback = os.path.expanduser("~/.local/bin/uv")
+    if not uv_bin and os.path.exists(fallback):
+        uv_bin = fallback
+    return uv_bin
+
+
+def _ensure_polars_compat_runtime():
+    """For CPUs without AVX2 etc. ("polars_runtime": "compat" in config.json).
+
+    Extensions such as CSV Importer bundle polars with its standard runtime
+    into extensions/.local, and import it while add-ons register - before
+    load_post attaches the repo venv. polars prefers _polars_runtime_compat
+    whenever one of the same version is importable, but Blender deletes
+    anything in .local that no extension bundled. So the matching
+    polars-runtime-compat is kept in <Blender user dir>/polars_compat/<version>
+    and put on sys.path here, at startup, before add-ons load. A new polars
+    version (an extension update) installs a new one with uv.
+    """
+    config_path = os.path.expanduser("~/.config/blender/config.json")
+    try:
+        with open(config_path) as f:
+            runtime = json.load(f).get("polars_runtime")
+    except (OSError, ValueError):
+        return
+    if runtime != "compat":
+        return
+
+    import importlib.metadata
+
+    # Blender adds this to sys.path only after startup scripts run, so the
+    # polars version is read from it directly.
+    wheels_dir = os.path.join(
+        bpy.utils.user_resource("EXTENSIONS", path=".local"),
+        "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages",
+    )
+    dist = next(importlib.metadata.distributions(name="polars", path=[wheels_dir]), None)
+    if dist is None:
+        return  # no extension bundles polars, so nothing to do
+    version = dist.version
+
+    target = os.path.join(bpy.utils.resource_path("USER"), "polars_compat", version)
+    if not os.path.isdir(os.path.join(target, "_polars_runtime_compat")):
+        uv_bin = _find_uv()
+        if not uv_bin:
+            print("[Chezmoi/polars Error] Can't install polars-runtime-compat: uv not found.")
+            return
+        print(f"[Chezmoi/polars] Installing polars-runtime-compat {version} into {target}...")
+        staging = target + ".partial"
+        shutil.rmtree(staging, ignore_errors=True)
+        result = subprocess.run(
+            [uv_bin, "pip", "install", "--quiet", "--no-deps", "--target", staging,
+             "--python", sys.executable, f"polars-runtime-compat=={version}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"[Chezmoi/polars Error] uv failed: {result.stderr.strip()}")
+            shutil.rmtree(staging, ignore_errors=True)
+            return
+        shutil.rmtree(target, ignore_errors=True)
+        os.rename(staging, target)
+
+    if target not in sys.path:
+        sys.path.append(target)
+    print(f"[Chezmoi/polars] Using polars-runtime-compat {version}: {target}")
+
+
 def register():
+    try:
+        _ensure_polars_compat_runtime()
+    except Exception as e:
+        print(f"[Chezmoi/polars Error] {e}")
     # Hook directly into the post-load routine so context variables exist safely
     bpy.app.handlers.load_post.append(load_and_sync_chezmoi)
 

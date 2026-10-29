@@ -3,10 +3,9 @@ from . import get_extension_keys
 import bpy
 
 # The GIS and data-viz tools now live in the AVL GeoViz extension
-# (~/dev/blender-avl-geoviz). geo_coord.py and country_wireframes.py stay
-# here, unregistered, only for cli/geojson_export.py (see
-# cli/_startup_loader.py); constant_mass_core.py, constant_mass_geometry_io.py
-# and _attr_io_shared.py stay for user_scripts/.
+# (~/dev/blender-avl-geoviz); cli/_startup_loader.py loads its source for
+# cli/geojson_export.py. constant_mass_core.py, constant_mass_geometry_io.py
+# and _attr_io_shared.py stay here for user_scripts/.
 
 # Define the Blender addon/script metadata block
 bl_info = {

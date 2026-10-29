@@ -26,15 +26,18 @@ class name, not by which Python module/package imported them), and the
 probe below detects that state directly rather than caring what either
 path called itself.
 
-If a real Blender session already has the GeoJSON importer (from the AVL
-GeoViz extension, or the `bpy` module resolving the same user script path
-chezmoi's symlink points at), registration is skipped (detected via an already-registered
-operator class) to avoid a "class already registered" error - so this is
-safe to call unconditionally at the top of any cli/ tool.
+The GeoJSON importer itself comes from the AVL GeoViz extension's source
+(see find_geoviz() below). If a real Blender session already has it
+registered (the extension enabled), registration is skipped (detected via
+an already-registered operator class) to avoid a "class already
+registered" error - so this is safe to call unconditionally at the top of
+any cli/ tool.
 """
 
 import importlib.util
+import os
 import sys
+import types
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -44,6 +47,45 @@ PACKAGE_NAME = "blender_config_startup"  # our own name for this loader's
                                           # deliberately independent of
                                           # chezmoi's real symlink name,
                                           # see module docstring above
+
+# The GIS tools (the GeoJSON importer included) live in the AVL GeoViz
+# extension. A pip `bpy` doesn't load extensions, so its source is loaded
+# directly, from the first of these that exists: $AVL_GEOVIZ_PATH, an
+# installed copy (newest Blender version first), or a checkout in ~/dev.
+GEOVIZ_PACKAGE_NAME = "avl_geoviz_cli"
+GEOVIZ_MODULES = ("geo_coord", "country_wireframes")
+
+
+def _geoviz_candidates():
+    if os.environ.get("AVL_GEOVIZ_PATH"):
+        yield Path(os.environ["AVL_GEOVIZ_PATH"]).expanduser()
+    config = Path.home() / ".config" / "blender"
+    installed = config.glob("*/extensions/*/avl_geoviz")
+    yield from sorted(installed, key=lambda p: [int(x) for x in p.parts[-4].split(".") if x.isdigit()], reverse=True)
+    yield Path.home() / "dev" / "blender-avl-geoviz" / "src" / "avl_geoviz"
+
+
+def find_geoviz():
+    for path in _geoviz_candidates():
+        if (path / "country_wireframes.py").is_file():
+            return path
+    raise RuntimeError(
+        "Couldn't find the AVL GeoViz extension's source: install the extension, "
+        "check out ~/dev/blender-avl-geoviz, or set AVL_GEOVIZ_PATH to its "
+        "avl_geoviz/ folder."
+    )
+
+
+def _load_geoviz():
+    """Import AVL GeoViz's geo_coord and country_wireframes under a package
+    of our own, without running its __init__ (which loads every tool and
+    refuses to register alongside other copies), and register them."""
+    if GEOVIZ_PACKAGE_NAME not in sys.modules:
+        package = types.ModuleType(GEOVIZ_PACKAGE_NAME)
+        package.__path__ = [str(find_geoviz())]
+        sys.modules[GEOVIZ_PACKAGE_NAME] = package
+    for name in GEOVIZ_MODULES:
+        importlib.import_module(f"{GEOVIZ_PACKAGE_NAME}.{name}").register()
 
 # A representative operator CLASS this package's register() creates -
 # used only to detect "is this already loaded", not called for any other
@@ -88,9 +130,5 @@ def load_and_register():
         spec.loader.exec_module(module)
 
     module.register()
-    # The GIS tools are no longer registered by the package itself (they
-    # live in the AVL GeoViz extension, which a pip `bpy` doesn't load), so
-    # register this repo's remaining copies directly.
-    for name in ("geo_coord", "country_wireframes"):
-        importlib.import_module(f"{PACKAGE_NAME}.{name}").register()
+    _load_geoviz()
     return module

@@ -37,7 +37,11 @@
       "path": "/home/example/blender-assets/"
     }
   ],
+  "extension_repositories": [
+    "https://matthewturk.github.io/avl-blender-extensions/index.json"
+  ],
   "extensions": [
-    "node_wrangler"
+    "node_wrangler",
+    "script_runner"
   ]
 }
