@@ -2,7 +2,7 @@
 # script that needs to bake a numpy RGBA array into a bpy.types.Image) - see
 # _collection_to_lists_shared.py for why this lives one directory up, in
 # scripts/startup/, rather than inside user_scripts/ or node_scripts/
-# themselves: dynamic_script_runner.py's directory scans only look for a
+# themselves: the Script Runner extension's directory scans only look for a
 # PARAMS+execute pair or a build() function, so a plain helper module kept
 # alongside those folders (instead of one level up here) would wrongly be
 # treated as a runnable script/node-tree entry of its own.
@@ -10,7 +10,7 @@
 # Import this via the repo's usual "_load_sibling" pattern (see
 # user_scripts/constant_mass_emission_times.py) rather than a package-
 # relative import: user_scripts/ and node_scripts/ files are loaded one at a
-# time by dynamic_script_runner.py via importlib.util.spec_from_file_
+# time by the Script Runner extension via importlib.util.spec_from_file_
 # location, with no parent package context, so `from . import x` doesn't
 # work from inside them.
 

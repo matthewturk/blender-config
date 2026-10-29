@@ -27,12 +27,26 @@ wheels = [
 ]
 
 [[package]]
+name = "beautifulsoup4"
+version = "4.15.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "soupsieve" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/43/65/318323f98dbee45d42dff61d8f047181bc6f2268a9068cfad035a46be5af/beautifulsoup4-4.15.0.tar.gz", hash = "sha256:288e3ca7d54b06f2ac191970bc275c1939cb46d450b255bf6718b04aa37ab4f7", size = 632571, upload-time = "2026-06-07T16:44:20.453Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/c6/92fcd42f1ba33e1184263f25bfabf3d27c383410470f169e4b8163bf9c17/beautifulsoup4-4.15.0-py3-none-any.whl", hash = "sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9", size = 109924, upload-time = "2026-06-07T16:44:21.566Z" },
+]
+
+[[package]]
 name = "blender"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "bpy" },
     { name = "cmyt" },
+    { name = "d3blender" },
     { name = "databpy" },
     { name = "geonamescache" },
     { name = "geopandas" },
@@ -57,6 +71,7 @@ dependencies = [
 requires-dist = [
     { name = "bpy", specifier = ">=5.2.2" },
     { name = "cmyt", specifier = ">=2.0.2" },
+    { name = "d3blender", editable = "/home/mturk/dev/d3blender" },
     { name = "databpy", specifier = ">=0.7.0" },
     { name = "geonamescache", specifier = ">=3.0.1" },
     { name = "geopandas", specifier = ">=1.1.4" },
@@ -73,8 +88,8 @@ requires-dist = [
     { name = "tree-clipper", specifier = ">=0.1.8" },
     { name = "unyt", specifier = ">=3.1.0" },
     { name = "usd-core", specifier = ">=26.8" },
-    { name = "yt", specifier = ">=4.4.2" },
-    { name = "yt-idv", directory = "/home/mturk/yt/cycles-yt/yt_idv" },
+    { name = "yt", editable = "/home/mturk/yt/yt-ghost-zone" },
+    { name = "yt-idv", editable = "/home/mturk/dxl/yt_idv" },
 ]
 
 [[package]]
@@ -248,6 +263,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/19/a2/5f4d305cbd4489d21570e5491ad5c483c478cdab032853e2125c280e3bd5/cython-3.3.0-cp39-abi3-win_arm64.whl", hash = "sha256:dce56c26d388f00a19426371b6926bf2f77c5c03b71d5273e4556c68be98c2dd", size = 2608078, upload-time = "2026-08-22T05:17:56.386Z" },
     { url = "https://files.pythonhosted.org/packages/bf/77/67b0b24e45073a699610e50f00c18474ff9b09ea29ecc95083bdf5e60acd/cython-3.3.0-py3-none-any.whl", hash = "sha256:9b24b5c8cd536946b62086fcafee6d5509d3f549f72d553d2336af87ffbe0da1", size = 1349151, upload-time = "2026-08-22T05:16:36.741Z" },
 ]
+
+[[package]]
+name = "d3blender"
+version = "0.1.0"
+source = { editable = "/home/mturk/dev/d3blender" }
+dependencies = [
+    { name = "beautifulsoup4" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.7" },
+    { name = "bpy", marker = "python_full_version == '3.13.*' and extra == 'blender-test'", specifier = "==5.2.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7" },
+]
+provides-extras = ["dev", "blender-test"]
 
 [[package]]
 name = "databpy"
@@ -771,6 +802,33 @@ wheels = [
 ]
 
 [[package]]
+name = "rlic"
+version = "0.5.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/2f/b4606863279c0757d1cf1d4995f22a1297d8f9c30232cb7a2e11150fc2c5/rlic-0.5.6.tar.gz", hash = "sha256:7c3fe035fa0079b956af83967654a9b679ebe3c64009ef7d16faa3f36079a421", size = 27906, upload-time = "2026-10-15T14:23:00.976Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/66/7c/108e9e7b3e7be24dbec5e8150ace65e87c5ab2d6ea53ba1e7048da54c6c6/rlic-0.5.6-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:f201c830f6095e423130b8e48f1fe56a88ad19377b78fa6e21f2e6fcd3311694", size = 220701, upload-time = "2026-10-15T14:22:35.349Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/b6/50c6b9fe7bf3cd70c60eb5703bcaea50ad079c66c808f709039fe7dcb987/rlic-0.5.6-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:0b8a8adad86dd692f297848bec2958999c82165d664145c785677cc38c420cd8", size = 206575, upload-time = "2026-10-15T14:22:37.358Z" },
+    { url = "https://files.pythonhosted.org/packages/f5/24/b58f2ba9a1998ef255db2ba0073eacad2b62a452688d253a54061caf2a84/rlic-0.5.6-cp311-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b31ca189a02ebeca02f2a7cb07bc765a1dc3c13ce6bfe759054297481c9827ed", size = 226521, upload-time = "2026-10-15T14:22:38.803Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/a6/c1793e6c3003096267996289620a29682aa76217aba05c98adb9ef107a07/rlic-0.5.6-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d4e4968daf98f06edd488318d777c0036153cfa206d29a8514841e15199faf90", size = 243361, upload-time = "2026-10-15T14:22:40.375Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/28/67883761c33afbe0da68d2b359ceb18149c639a387b124ea936fe9c8c316/rlic-0.5.6-cp311-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:34d6c41c1889a97e037aeab61cb3f94f41e1841cd1448c7dfd8299af91efd133", size = 404320, upload-time = "2026-10-15T14:22:42.147Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/66/9897dc8723afc5087ccab3a563432b0738ff4deca5f7c58d6b1203237e9c/rlic-0.5.6-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:cc30285fb7cbcf9f86f7cf5f1535650c050c3f918f9a9b6a7f5806ad732c5d3f", size = 455717, upload-time = "2026-10-15T14:22:43.738Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/fe/bbe15dea6e6774f026ba6b41eb4d290baa6e161f1299f66d9a587ffed334/rlic-0.5.6-cp311-abi3-win_amd64.whl", hash = "sha256:caaeb6b49eef69a22d6249f6f6e261dbcc037076556ecd83a8d3b583a6db9053", size = 140214, upload-time = "2026-10-15T14:22:45.22Z" },
+    { url = "https://files.pythonhosted.org/packages/04/83/0db9541c06685df5ecac8bf02d2bc490eff2908def40f0ea8487ff2dc32c/rlic-0.5.6-cp311-abi3-win_arm64.whl", hash = "sha256:b8d0a5238376ee903913c6b48d15afe992f76f43b197d426a8d84cc531f35eb7", size = 128571, upload-time = "2026-10-15T14:22:46.781Z" },
+    { url = "https://files.pythonhosted.org/packages/78/c5/b0fd4e9b5b27e9605f7206a72b03c6ba878fb1abc928215f9fe618a6e892/rlic-0.5.6-cp315-abi3.abi3t-macosx_10_12_x86_64.whl", hash = "sha256:d81ba72da3f0bea21b1ac142e4801204ea32aeae30e4b92e75a644e5f904dfcf", size = 222122, upload-time = "2026-10-15T14:22:48.187Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/a1/89c66fa72ec081372973769afdedf2e94b7b13a50987863ea9b0f018a28a/rlic-0.5.6-cp315-abi3.abi3t-macosx_11_0_arm64.whl", hash = "sha256:b18e53fdc517b5f54197c9114df096a28c0fe506e1da91302c7b88b34e558e6a", size = 205305, upload-time = "2026-10-15T14:22:49.848Z" },
+    { url = "https://files.pythonhosted.org/packages/91/20/d9b8da233e6999dc1762dd066c4ffdc59dd3c1b8f21b7a5c32fe14a53479/rlic-0.5.6-cp315-abi3.abi3t-manylinux_2_28_aarch64.whl", hash = "sha256:13064701fd43126523d4ffcd196fc612e498ad9c51e3aac30863ecebca5d1f3c", size = 226295, upload-time = "2026-10-15T14:22:51.373Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/a6/064ee76d1d16951a3ea993861a36c18bde53d2a895b3e11f32d731a65ce1/rlic-0.5.6-cp315-abi3.abi3t-manylinux_2_28_x86_64.whl", hash = "sha256:b70268fa5e9482cf128adcd7b37f1fba14bed95177f935cc43d20f94277e0c70", size = 243529, upload-time = "2026-10-15T14:22:52.958Z" },
+    { url = "https://files.pythonhosted.org/packages/24/9c/6bfd209ada67ae1a8d047399447e42503d5c89b5dcb549e5d28ab60bcb08/rlic-0.5.6-cp315-abi3.abi3t-musllinux_1_2_aarch64.whl", hash = "sha256:8388f7977c8dd6cb7feca6b8e6db8efe1831492dd8e1b985e5d84808c093acc8", size = 404100, upload-time = "2026-10-15T14:22:54.47Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/e2/8795f7c497662e8f4d7b23f893c8d46af84238f826de6266477c42096e5d/rlic-0.5.6-cp315-abi3.abi3t-musllinux_1_2_x86_64.whl", hash = "sha256:9ef67ce6ac4090ea6e98cb261e7ff0c4d8085c7d764267d8179414ab1f26f6c8", size = 455784, upload-time = "2026-10-15T14:22:56.249Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/47/01aad2b127df0b1e37484762a1c721cbd655e09f3a38f710813915a528a2/rlic-0.5.6-cp315-abi3.abi3t-win_amd64.whl", hash = "sha256:dd35fb35492df7efbd28ce90c2b5ccd700fefab91651994400ff51852e60c49a", size = 139871, upload-time = "2026-10-15T14:22:57.988Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/56/ec51c51e59d4c83ccc4aca78ee3d720d834a928c4adf3a9b2b2c9fe56fd7/rlic-0.5.6-cp315-abi3.abi3t-win_arm64.whl", hash = "sha256:aecc01d1c2ed88efb677d52af2cad90d2fc69b4b03bcf4008335e4b8a01b5c9b", size = 127509, upload-time = "2026-10-15T14:22:59.487Z" },
+]
+
+[[package]]
 name = "scipy"
 version = "1.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -825,6 +883,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "soupsieve"
+version = "3.0.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/63/0b6bae54546aed98d72f12d09df57b19a287f01c84d22047fa2e23772ab9/soupsieve-3.0.4.tar.gz", hash = "sha256:924fab84ae21604c19e175e1f39815eb6fa83ba23836e09e9de180925e5bc4c0", size = 119017, upload-time = "2026-10-22T00:45:26.362Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/66/473f7ca0be0b06e38ee8c85ee2db184e3981bd769fac2e7c19c8a8865211/soupsieve-3.0.4-py3-none-any.whl", hash = "sha256:8412826614f9c632227067d0985aeb9f584bd15efc852955430e097a9fe7afbf", size = 42458, upload-time = "2026-10-22T00:45:24.843Z" },
 ]
 
 [[package]]
@@ -943,8 +1010,8 @@ wheels = [
 
 [[package]]
 name = "yt"
-version = "4.4.2"
-source = { registry = "https://pypi.org/simple" }
+version = "4.5.dev0"
+source = { editable = "/home/mturk/yt/yt-ghost-zone" }
 dependencies = [
     { name = "cmyt" },
     { name = "ewah-bool-utils" },
@@ -953,22 +1020,165 @@ dependencies = [
     { name = "numpy" },
     { name = "packaging" },
     { name = "pillow" },
+    { name = "rlic" },
     { name = "tomli-w" },
     { name = "tqdm" },
     { name = "unyt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/32/60/01bd06e147ad1c437f17bc2b6aa17ce48760556507d88d291386f2b7ed16/yt-4.4.2.tar.gz", hash = "sha256:e0883a89c2543b436c3778f555edf253c71f252f744752dc1688f8524ad03b0b", size = 4946809, upload-time = "2025-11-18T16:45:16.118Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/d5/b08efa45f910574035d71c9cdcd3fb138205980ff5dbe24e73e6bc0bc7a0/yt-4.4.2-cp311-abi3-macosx_10_9_x86_64.whl", hash = "sha256:97ce93dc02d83c4607e6182a4caf3998e849049fc9762d7d1d2fca5c6399b985", size = 6483893, upload-time = "2025-11-18T16:45:05.414Z" },
-    { url = "https://files.pythonhosted.org/packages/80/69/515f94735278665fdd5b6135d6bbb8d332f7d2f36dd24b7e1b49d8295d98/yt-4.4.2-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:69db933ad99bfdc1e810c85b94f671a8ed07cb3e57e3775252548cfc9456a8e6", size = 6492665, upload-time = "2025-11-18T16:45:06.71Z" },
-    { url = "https://files.pythonhosted.org/packages/19/19/0db5ebd4e9c132151ad65361130518ebb0467b7a34bbc9fca0f9c5a57067/yt-4.4.2-cp311-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:10f03fa53440c030ceed7323a5fb11468ec103415df07e17e96f3027b2ba0a32", size = 31815708, upload-time = "2025-11-18T16:45:08.337Z" },
-    { url = "https://files.pythonhosted.org/packages/3b/e1/54f4bf2b49c45fbec1ed123971ac0c8e54438be1ec27b69ded17c41837e8/yt-4.4.2-cp311-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:bd313ff522ca018b30407267052ee72a084fc7927aab2feb77877742cd38c971", size = 32578256, upload-time = "2025-11-18T16:45:11.904Z" },
-    { url = "https://files.pythonhosted.org/packages/6b/b1/1a4402e1634b8bec454fa51ec0ce9de38ab3496822c3847c3e1e328dd2ab/yt-4.4.2-cp311-abi3-win_amd64.whl", hash = "sha256:5cca478f34e341a7ae231e2936463e9134134a17eb0854e51f0cefd33d1edddf", size = 16071379, upload-time = "2025-11-18T16:45:14.115Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "arm-pyart", marker = "extra == 'cf-radial'", specifier = ">=1.19.2" },
+    { name = "astropy", marker = "extra == 'fits'", specifier = ">=5.0.1" },
+    { name = "cartopy", marker = "extra == 'full'", specifier = ">=0.22.0" },
+    { name = "cmyt", specifier = ">=1.1.2" },
+    { name = "ewah-bool-utils", specifier = ">=1.2.0,<2" },
+    { name = "f90nml", marker = "extra == 'fortran'", specifier = ">=1.1" },
+    { name = "firefly", marker = "extra == 'full'", specifier = ">=3.2.0" },
+    { name = "h5py", marker = "sys_platform == 'darwin' and extra == 'hdf5'", specifier = "!=3.15.0" },
+    { name = "h5py", marker = "sys_platform == 'win32' and extra == 'hdf5'", specifier = "!=3.12.0" },
+    { name = "h5py", marker = "extra == 'hdf5'", specifier = ">=3.6.0" },
+    { name = "ipython", marker = "extra == 'full'", specifier = ">=7.23.1" },
+    { name = "ipywidgets", marker = "extra == 'full'", specifier = ">=8.0.0" },
+    { name = "libconf", marker = "extra == 'enzo'", specifier = ">=1.0.1" },
+    { name = "libconf", marker = "extra == 'enzo-e'", specifier = ">=1.0.1" },
+    { name = "matplotlib", specifier = ">=3.7.0" },
+    { name = "miniballcpp", marker = "extra == 'full'", specifier = ">=0.2.1" },
+    { name = "more-itertools", specifier = ">=8.4" },
+    { name = "mpi4py", marker = "extra == 'full'", specifier = ">=3.1.6" },
+    { name = "netcdf4", marker = "extra == 'netcdf4'", specifier = ">=1.5.8,!=1.6.1" },
+    { name = "numpy", specifier = ">=1.21.3,<3" },
+    { name = "numpy", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "!=2.0.1" },
+    { name = "packaging", specifier = ">=21.0" },
+    { name = "pandas", marker = "extra == 'full'", specifier = ">=1.3.4" },
+    { name = "pillow", specifier = ">=8.3.2" },
+    { name = "pooch", marker = "extra == 'full'", specifier = ">=0.7.0" },
+    { name = "pyaml", marker = "extra == 'full'", specifier = ">=17.10.0" },
+    { name = "pyaml", marker = "extra == 'test'", specifier = ">=17.10.0" },
+    { name = "pykdtree", marker = "extra == 'full'", specifier = ">=1.3.4" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.1" },
+    { name = "pytest-mpl", marker = "extra == 'test'", specifier = ">=0.16.1" },
+    { name = "pyx", marker = "extra == 'full'", specifier = ">=0.15" },
+    { name = "pyyaml", marker = "extra == 'quokka'", specifier = ">=6.0.1" },
+    { name = "ratarmount", marker = "sys_platform != 'darwin' and sys_platform != 'win32' and extra == 'full'", specifier = "~=0.8.1" },
+    { name = "regions", marker = "extra == 'fits'", specifier = ">=0.7" },
+    { name = "requests", marker = "extra == 'http-stream'", specifier = ">=2.30.0" },
+    { name = "requests", marker = "extra == 'sdf'", specifier = ">=2.30.0" },
+    { name = "rlic", specifier = ">=0.3.2" },
+    { name = "scipy", marker = "extra == 'full'", specifier = ">=1.7.2" },
+    { name = "scipy", marker = "extra == 'ramses'", specifier = ">=1.7.2" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=1.2.3" },
+    { name = "tomli-w", specifier = ">=0.4.0" },
+    { name = "tqdm", specifier = ">=3.4.0" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12'", specifier = ">=4.6.0" },
+    { name = "unyt", specifier = ">=2.9.2" },
+    { name = "xarray", marker = "extra == 'cf-radial'", specifier = ">=0.16.1" },
+    { name = "yt", extras = ["adaptahop"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["ahf"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["amrex"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["amrex"], marker = "extra == 'quokka'" },
+    { name = "yt", extras = ["amrvac"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["arepo"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["art"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["artio"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["athena"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["athena-pp"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["boxlib"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["cf-radial"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["chimera"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["cholla"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["chombo"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["eagle"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["enzo"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["enzo-e"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["exodus-ii"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["fits"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["flash"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["fortran"], marker = "extra == 'amrvac'" },
+    { name = "yt", extras = ["fortran"], marker = "extra == 'ramses'" },
+    { name = "yt", extras = ["gadget"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["gadget-fof"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["gamer"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["gdf"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["gizmo"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["halo-catalog"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'arepo'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'chimera'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'cholla'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'chombo'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'eagle'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'enzo'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'enzo-e'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'flash'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'gadget'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'gadget-fof'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'gamer'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'gdf'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'gizmo'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'halo-catalog'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'moab'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'open-pmd'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'owls'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'owls-subfind'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'parthenon'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'swift'" },
+    { name = "yt", extras = ["hdf5"], marker = "extra == 'ytdata'" },
+    { name = "yt", extras = ["http-stream"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["idefix"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["moab"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["nc4-cm1"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["netcdf4"], marker = "extra == 'exodus-ii'" },
+    { name = "yt", extras = ["netcdf4"], marker = "extra == 'nc4-cm1'" },
+    { name = "yt", extras = ["open-pmd"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["owls"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["owls-subfind"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["parthenon"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["quokka"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["ramses"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["rockstar"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["sdf"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["stream"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["swift"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["tipsy"], marker = "extra == 'full'" },
+    { name = "yt", extras = ["ytdata"], marker = "extra == 'full'" },
+    { name = "yt-idefix", extras = ["hdf5"], marker = "extra == 'idefix'", specifier = ">=2.3.0" },
+]
+provides-extras = ["hdf5", "netcdf4", "fortran", "adaptahop", "ahf", "amrex", "amrvac", "art", "arepo", "artio", "athena", "athena-pp", "boxlib", "cf-radial", "chimera", "chombo", "cholla", "eagle", "enzo-e", "enzo", "exodus-ii", "fits", "flash", "gadget", "gadget-fof", "gamer", "gdf", "gizmo", "halo-catalog", "http-stream", "idefix", "moab", "nc4-cm1", "open-pmd", "owls", "owls-subfind", "parthenon", "quokka", "ramses", "rockstar", "sdf", "stream", "swift", "tipsy", "ytdata", "full", "test"]
+
+[package.metadata.requires-dev]
+docs = [
+    { name = "alabaster", specifier = ">=0.7.13" },
+    { name = "bottle", specifier = ">=0.12.25" },
+    { name = "ipykernel", specifier = ">=6.29.4" },
+    { name = "jinja2", specifier = "<3.2.0" },
+    { name = "jupyter-client", specifier = ">=8.3.1" },
+    { name = "nbsphinx", specifier = ">=0.9.3" },
+    { name = "nose", marker = "python_full_version < '3.10'", specifier = "~=1.3.7" },
+    { name = "pytest", specifier = ">=6.1" },
+    { name = "pyx", specifier = ">=0.15" },
+    { name = "sphinx", specifier = ">=7.2.5" },
+    { name = "sphinx-bootstrap-theme", specifier = ">=0.8.1" },
+    { name = "sphinx-rtd-theme", specifier = ">=1.3.0" },
+]
+mapping = [{ name = "cartopy", extras = ["plotting"], specifier = ">=0.22.0" }]
+mapserver = [{ name = "bottle", specifier = ">=0.13.0" }]
+nosetest = [
+    { name = "nose", specifier = "~=1.3.7" },
+    { name = "nose-exclude", specifier = ">=0.5.0" },
+    { name = "nose-timer", specifier = "~=1.0.0" },
+    { name = "setuptools", specifier = ">=77.0.1,<82.0.0" },
+]
+typecheck = [
+    { name = "mypy", specifier = ">=1.18.2" },
+    { name = "types-chardet", specifier = ">=5.0.4.6" },
+    { name = "types-pyyaml", specifier = ">=6.0.12.20250915" },
+    { name = "types-requests", specifier = ">=2.32.4.20250913" },
+    { name = "typing-extensions", marker = "python_full_version < '3.12'", specifier = ">=4.6.0" },
 ]
 
 [[package]]
 name = "yt-idv"
-source = { directory = "/home/mturk/yt/cycles-yt/yt_idv" }
+source = { editable = "/home/mturk/dxl/yt_idv" }
 dependencies = [
     { name = "click" },
     { name = "cmyt" },
@@ -979,11 +1189,13 @@ dependencies = [
     { name = "pyyaml" },
     { name = "traitlets" },
     { name = "traittypes" },
+    { name = "unyt" },
     { name = "yt" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "cartopy", marker = "extra == 'examples'" },
     { name = "click", specifier = ">=7.0" },
     { name = "cmyt" },
     { name = "imgui", marker = "extra == 'gui'", specifier = ">=1.2.0" },
@@ -996,11 +1208,13 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=6.2.4" },
     { name = "pytest-html", marker = "extra == 'test'" },
     { name = "pyyaml", specifier = ">=5.3.1" },
+    { name = "shapely", marker = "extra == 'examples'" },
     { name = "traitlets", specifier = ">=5.0.5" },
     { name = "traittypes", specifier = ">=0.2.1" },
+    { name = "unyt" },
     { name = "yt", specifier = ">=4.1.0" },
 ]
-provides-extras = ["gui", "minimal", "test"]
+provides-extras = ["gui", "minimal", "test", "examples"]
 
 [[package]]
 name = "zstandard"

@@ -1,3 +1,5 @@
+import os
+import importlib.util
 import bpy
 import numpy as np
 import databpy as db
@@ -26,6 +28,17 @@ from nodebpy import geometry as g
 # Nodes' Named Attribute node can't read STRING attributes, so this rebuilds
 # the list fresh from Python instead. It isn't attached to any modifier;
 # use_fake_user keeps it around to be added manually wherever it's needed.
+
+def _load_sibling(module_name):
+    path = os.path.join(os.path.dirname(__file__), "..", f"{module_name}.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_attrs = _load_sibling("_attr_io_shared")
+
 
 PARAMS = {
     "hdf5_path": {
@@ -105,22 +118,6 @@ def _gather_group_attrs(group):
             continue
         attrs[key] = value
     return attrs
-
-
-def _write_string_attribute(obj_data, name, values, domain):
-    """Write a STRING attribute directly through bpy's attributes API.
-
-    databpy's `store_named_attribute` doesn't handle STRING attributes on
-    every installed version (some route straight through `foreach_set`,
-    which can't take a sequence of strings), so this is done by hand instead.
-    """
-    attr = obj_data.attributes.get(name)
-    if attr is None or attr.data_type != "STRING" or attr.domain != domain:
-        if attr is not None:
-            obj_data.attributes.remove(attr)
-        attr = obj_data.attributes.new(name=name, type="STRING", domain=domain)
-    for item, value in zip(attr.data, values):
-        item.value = str(value).encode("utf-8")
 
 
 def _read_curve_group_names(curves_data):
@@ -332,11 +329,11 @@ def execute(context, params):
     )
     for attr_name, arr in point_attrs.items():
         db.store_named_attribute(obj, arr, attr_name, domain=db.AttributeDomains.POINT)
-    _write_string_attribute(curves_data, "group_name", group_names_per_curve, domain="CURVE")
+    _attrs.write_string_attribute(curves_data, "group_name", group_names_per_curve, domain="CURVE")
 
     for attr_name, (kind, values) in curve_attrs.items():
         if kind == "STRING":
-            _write_string_attribute(curves_data, attr_name, values, domain="CURVE")
+            _attrs.write_string_attribute(curves_data, attr_name, values, domain="CURVE")
         else:
             db.store_named_attribute(obj, values, attr_name, domain=db.AttributeDomains.CURVE)
 
@@ -351,7 +348,7 @@ def execute(context, params):
         raise RuntimeError(
             "group_name attribute round-trip mismatch after writing - "
             f"expected {expected_group_names!r}, read back {stored_group_names!r}. "
-            "This means _write_string_attribute (or Blender's own STRING "
+            "This means write_string_attribute (or Blender's own STRING "
             "attribute storage) reordered or corrupted the data; the Group "
             "Names node group was NOT built to avoid propagating bad data."
         )

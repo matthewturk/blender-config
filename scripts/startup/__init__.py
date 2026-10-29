@@ -1,16 +1,12 @@
 from . import _chezmoi_sync_shim as chezmoi_sync
-from . import geo_coord
-from . import country_wireframes
 from . import get_extension_keys
-from . import flat_gis_importer
-from . import dynamic_script_runner
-from . import gpx_import
-from . import ppm1d_nodebpy
-from . import data_visualization_menu
-from . import constant_mass_emission_generator
-from . import country_pair_batch_emitter
-from . import viewport_switch
 import bpy
+
+# The GIS and data-viz tools now live in the AVL GeoViz extension
+# (~/dev/blender-avl-geoviz). geo_coord.py and country_wireframes.py stay
+# here, unregistered, only for cli/geojson_export.py (see
+# cli/_startup_loader.py); constant_mass_core.py, constant_mass_geometry_io.py
+# and _attr_io_shared.py stay for user_scripts/.
 
 # Define the Blender addon/script metadata block
 bl_info = {
@@ -20,7 +16,7 @@ bl_info = {
     "blender": (5, 0, 0),
     "location": "Startup",
     "description": (
-        "Automated preference synchronization and extension tracking exporter, along with some GIS and dynamic python execution stuff."
+        "Automated preference synchronization and extension tracking exporter. The script runner, viewport clipping and GIS tools now live in their own extensions (~/dev/blender-script-runner, ~/dev/blender-viewport-clipping, ~/dev/blender-avl-geoviz)."
     ),
     "category": "System",
 }
@@ -29,34 +25,13 @@ bl_info = {
 def register():
     # Pass registration downstream to your sync logic
     chezmoi_sync.register()
-    geo_coord.register()
-    country_wireframes.register()
     get_extension_keys.register()
-    flat_gis_importer.register()
-    dynamic_script_runner.register()
-    gpx_import.register()
-    data_visualization_menu.register()
-    constant_mass_emission_generator.register()
-    country_pair_batch_emitter.register()
-    viewport_switch.register()
-    bpy.app.timers.register(ppm1d_nodebpy.build_ppm_tree, first_interval=3.0)
 
 
 def unregister():
     # Allow safe unregistering if needed
-    if bpy.app.timers.is_registered(ppm1d_nodebpy.build_ppm_tree):
-        bpy.app.timers.unregister(ppm1d_nodebpy.build_ppm_tree)
     chezmoi_sync.unregister()
-    geo_coord.unregister()
-    country_wireframes.unregister()
     get_extension_keys.unregister()
-    flat_gis_importer.unregister()
-    dynamic_script_runner.unregister()
-    gpx_import.unregister()
-    constant_mass_emission_generator.unregister()
-    country_pair_batch_emitter.unregister()
-    data_visualization_menu.unregister()
-    viewport_switch.unregister()
 
 
 if __name__ == "__main__":

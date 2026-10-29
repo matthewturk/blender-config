@@ -1,3 +1,5 @@
+import os
+import importlib.util
 import bpy
 import csv
 
@@ -15,6 +17,17 @@ import csv
 # change too, which does invalidate existing links to it - unavoidable,
 # since a socket can't change type in place while staying connected to
 # something expecting the old one.
+
+def _load_sibling(module_name):
+    path = os.path.join(os.path.dirname(__file__), "..", f"{module_name}.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_attrs = _load_sibling("_attr_io_shared")
+
 
 PARAMS = {
     "csv_path": {
@@ -132,23 +145,6 @@ def _coerce(raw, value_type):
     return raw
 
 
-def ensure_socket(tree, in_out, name, socket_type):
-    for item in tree.interface.items_tree:
-        if (
-            getattr(item, "item_type", None) == "SOCKET"
-            and item.in_out == in_out
-            and item.name == name
-        ):
-            if item.socket_type == socket_type:
-                return item
-            # Type changed since the last run - has to be replaced, which
-            # breaks any existing link to it (a socket can't change type
-            # while staying connected to something expecting the old one).
-            tree.interface.remove(item)
-            break
-    return tree.interface.new_socket(name=name, in_out=in_out, socket_type=socket_type)
-
-
 def execute(context, params):
     csv_path = bpy.path.abspath(params["csv_path"])
     name_column = params["name_column"]
@@ -200,8 +196,8 @@ def execute(context, params):
     group_input.location = (-400, 0)
     group_output.location = (400, 0)
 
-    ensure_socket(node_tree, "INPUT", "Menu", "NodeSocketMenu")
-    ensure_socket(node_tree, "OUTPUT", "Value", socket_type)
+    _attrs.ensure_socket(node_tree, "INPUT", "Menu", "NodeSocketMenu")
+    _attrs.ensure_socket(node_tree, "OUTPUT", "Value", socket_type)
 
     switch = nodes.new("GeometryNodeMenuSwitch")
     switch.data_type = value_type

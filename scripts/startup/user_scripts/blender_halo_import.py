@@ -17,14 +17,23 @@ same CSV: instead of a pre-animated, keyframed scene, it builds one static
 Curves object with per-point/per-curve attributes for Geometry Nodes to
 read and drive itself - CSV loading is shared between the two via
 _halo_csv_shared.py, one directory up.
+
+Re-running is safe: halos and trails are reconciled against the CSV with
+d3blender's data().join(), keyed by branch_id, so a rerun updates the
+existing objects in place (anything referencing them keeps working),
+creates only new branches and removes branches no longer in the data -
+instead of piling up halo_<id>.001 duplicates.
 """
 
 import importlib.util
 import math
 import os
+import re
 from collections import defaultdict
 
 import bpy
+from d3blender import scale_linear, select
+from d3blender.blender_adapter import get_adapter
 
 PARAMS = {
     "csv_path": {
@@ -140,7 +149,7 @@ PARAMS = {
 def _load_sibling(module_name):
     """Load a module from scripts/startup/ (one directory up from
     user_scripts/) by file path - user_scripts/ files are loaded standalone
-    by dynamic_script_runner.py (no parent package context), so a package-
+    by the Script Runner extension (no parent package context), so a package-
     relative import doesn't work here. Same pattern as
     constant_mass_emission_times.py's _load_sibling.
     """
@@ -164,6 +173,50 @@ def _get_or_create_child_collection(parent, name):
     coll = bpy.data.collections.new(name)
     parent.children.link(coll)
     return coll
+
+
+def _keyed_selection(adapter, collection, prefix):
+    """The objects in `collection`, wrapped for a d3blender join. Objects
+    built before this script used joins have no d3_key yet; adopt the ones
+    still named exactly <prefix><branch_id> so a rerun updates them instead
+    of creating duplicates. Leftover <prefix><id>.NNN duplicates from those
+    older runs aren't touched, just reported."""
+    stale = []
+    for obj in collection.objects:
+        if "d3_key" in obj:
+            continue
+        match = re.fullmatch(rf"{prefix}(-?\d+)(\.\d{{3}})?", obj.name)
+        if match and not match.group(2):
+            obj["d3_key"] = match.group(1)
+        elif match:
+            stale.append(obj.name)
+    if stale:
+        print(f"{len(stale)} duplicate(s) left over from earlier runs in "
+              f"'{collection.name}' (e.g. {stale[0]}); safe to delete by hand")
+    return select(adapter, list(collection.objects))
+
+
+def _sphere_mesh(name="halo_sphere"):
+    """One UV sphere mesh shared by every halo, reused across reruns."""
+    mesh = bpy.data.meshes.get(name)
+    if mesh is None:
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=32, ring_count=16, radius=1.0)
+        template = bpy.context.active_object
+        mesh = template.data
+        mesh.name = name
+        bpy.data.objects.remove(template)
+    return mesh
+
+
+def _linked_duplicate(collection, name, data):
+    """Get or create `name` in `collection` (not a global name lookup)."""
+    obj = collection.objects.get(name)
+    if obj is None:
+        obj = bpy.data.objects.new(name, data)
+        collection.objects.link(obj)
+    else:
+        obj.data = data
+    return obj
 
 
 def build(halos, params):
@@ -209,44 +262,53 @@ def build(halos, params):
     key = {"time": "time", "scale_factor": "scale_factor", "snapshot": "snapshot"}[time_axis]
     t0 = min(h[key] for h in halos)
     t1 = max(h[key] for h in halos)
-
-    def frame(t):
-        return frame_start + (t - t0) / (t1 - t0) * (frame_end - frame_start)
+    frame = scale_linear((t0, t1), (frame_start, frame_end))
 
     branches = defaultdict(list)
     for h in halos:
         branches[h["branch_id"]].append(h)
+    for rows in branches.values():
+        rows.sort(key=lambda h: h["scale_factor"])
 
     root = _get_or_create_child_collection(bpy.context.scene.collection, collection_name)
     halos_coll = _get_or_create_child_collection(root, "Halos")
     trails_coll = _get_or_create_child_collection(root, "Trails") if make_trails else None
 
-    bpy.ops.mesh.primitive_uv_sphere_add(segments=32, ring_count=16, radius=1.0)
-    template = bpy.context.active_object
-    mesh = template.data
-    bpy.data.objects.remove(template)
-
+    mesh = _sphere_mesh()
     materials = {}
     for name, color in (("main_branch", (1.0, 0.55, 0.1, 1.0)), ("merger", (0.2, 0.5, 1.0, 1.0))):
         mat = bpy.data.materials.get(f"halo_{name}") or bpy.data.materials.new(f"halo_{name}")
         mat.diffuse_color = color
         materials[name] = mat
-    mesh.materials.append(materials["merger"])
+    if not mesh.materials:
+        mesh.materials.append(materials["merger"])
 
+    def enter_halo(item):
+        branch_id, _rows = item
+        # The sphere mesh is shared, so the material lives on the object.
+        obj = bpy.data.objects.new(f"halo_{branch_id}", mesh)
+        obj.material_slots[0].link = "OBJECT"
+        halos_coll.objects.link(obj)
+        return obj
+
+    adapter = get_adapter()
+    halo_sel = _keyed_selection(adapter, halos_coll, "halo_").data(
+        list(branches.items()), key=lambda i, item: str(item[0])
+    ).join(enter_halo)  # branches gone from the CSV are removed
+
+    paths = {}
+    main_obj = None
     prefs = bpy.context.preferences.edit
     saved = prefs.keyframe_new_interpolation_type, prefs.keyframe_new_handle_type
     prefs.keyframe_new_interpolation_type = interpolation
     prefs.keyframe_new_handle_type = handle_type
     try:
-        for branch_id, rows in branches.items():
-            rows.sort(key=lambda h: h["scale_factor"])
+        for obj, (branch_id, rows) in zip(halo_sel.elements, halo_sel.datum):
             is_main = rows[0]["main_branch"]
-
-            # The sphere mesh is shared, so the material lives on the object.
-            obj = bpy.data.objects.new(f"halo_{branch_id}", mesh)
-            obj.material_slots[0].link = "OBJECT"
             obj.material_slots[0].material = materials["main_branch" if is_main else "merger"]
-            halos_coll.objects.link(obj)
+            # Start from no keys, so a rerun with a different frame range or
+            # time axis doesn't leave the previous run's keyframes behind.
+            obj.animation_data_clear()
 
             path = []
             for h in rows:
@@ -280,58 +342,66 @@ def build(halos, params):
                     setattr(obj, prop, True)
                     obj.keyframe_insert(prop, frame=math.ceil(end_frame) + 1)
 
+            paths[branch_id] = path
             if is_main:
-                # A clearly-named, easy-to-find linked duplicate of the main
-                # branch's halo, placed directly in the root collection
-                # (not "Halos") so it's reachable without expanding a
-                # sub-collection - NOT a rename of halo_{branch_id} itself,
-                # so anything that references halos by their numeric
-                # branch_id name is unaffected. Shares the same mesh
-                # data-block, same as every halo_* object already does -
-                # but unlike a static trail's Curve points, a halo's motion
-                # is OBJECT-level keyframes (location/scale/hide_*), not
-                # mesh data, so sharing the mesh alone wouldn't move this
-                # duplicate at all. Sharing `obj`'s Action makes it animate
-                # in perfect lockstep with the real halo_{branch_id} object
-                # - but action alone isn't enough: Blender's newer layered-
-                # Action model (5.x) also needs action_slot assigned to the
-                # SAME slot `obj` uses, or the duplicate just sits at its
-                # raw, unanimated default transform instead of evaluating
-                # any keyframes at all - confirmed directly (frame_set()
-                # left it at (0,0,0) with only `.action` set, matching only
-                # by coincidence wherever the real object also happened to
-                # be at (0,0,0)).
-                main_halo = bpy.data.objects.new("halo_main", mesh)
-                main_halo.material_slots[0].link = "OBJECT"
-                main_halo.material_slots[0].material = materials["main_branch"]
-                main_halo.animation_data_create()
-                main_halo.animation_data.action = obj.animation_data.action
-                main_halo.animation_data.action_slot = obj.animation_data.action_slot
-                root.objects.link(main_halo)
-
-            if make_trails and len(path) > 1:
-                curve = bpy.data.curves.new(f"trail_{branch_id}", "CURVE")
-                curve.dimensions = "3D"
-                spline = curve.splines.new("POLY")
-                spline.points.add(len(path) - 1)
-                for p, co in zip(spline.points, path):
-                    p.co = (*co, 1.0)
-                trail = bpy.data.objects.new(f"trail_{branch_id}", curve)
-                curve.materials.append(obj.material_slots[0].material)
-                trails_coll.objects.link(trail)
-
-                if is_main:
-                    # Same idea as halo_main above: a linked duplicate (not
-                    # a rename) of the main branch's trail, placed directly
-                    # in the root collection instead of "Trails" so it's
-                    # right next to halo_main. Shares the same Curve
-                    # data-block (bpy.data.objects.new(name, curve), not
-                    # curve.copy()), so editing/smoothing this object's
-                    # points edits the real path data too.
-                    main_trail = bpy.data.objects.new("trail_main", curve)
-                    root.objects.link(main_trail)
+                main_obj = obj
     finally:
         prefs.keyframe_new_interpolation_type, prefs.keyframe_new_handle_type = saved
+
+    if main_obj is not None:
+        # A clearly-named, easy-to-find linked duplicate of the main
+        # branch's halo, placed directly in the root collection (not
+        # "Halos") so it's reachable without expanding a sub-collection -
+        # NOT a rename of halo_{branch_id} itself, so anything that
+        # references halos by their numeric branch_id name is unaffected.
+        # Shares the same mesh data-block, same as every halo_* object
+        # already does - but a halo's motion is OBJECT-level keyframes
+        # (location/scale/hide_*), not mesh data, so sharing the mesh alone
+        # wouldn't move this duplicate at all. Sharing the main halo's
+        # Action makes it animate in perfect lockstep - but action alone
+        # isn't enough: Blender's layered-Action model (5.x) also needs
+        # action_slot assigned to the SAME slot, or the duplicate just sits
+        # at its raw, unanimated default transform (confirmed directly:
+        # frame_set() left it at (0,0,0) with only `.action` set).
+        # Re-pointed on every run, since the main halo gets a fresh Action.
+        main_halo = _linked_duplicate(root, "halo_main", mesh)
+        main_halo.material_slots[0].link = "OBJECT"
+        main_halo.material_slots[0].material = materials["main_branch"]
+        main_halo.animation_data_create()
+        main_halo.animation_data.action = main_obj.animation_data.action
+        main_halo.animation_data.action_slot = main_obj.animation_data.action_slot
+
+    if make_trails:
+        trail_items = [(bid, paths[bid], halo.material_slots[0].material)
+                       for halo, (bid, _rows) in zip(halo_sel.elements, halo_sel.datum)
+                       if len(paths[bid]) > 1]
+
+        def enter_trail(item):
+            branch_id = item[0]
+            curve = bpy.data.curves.new(f"trail_{branch_id}", "CURVE")
+            curve.dimensions = "3D"
+            trail = bpy.data.objects.new(f"trail_{branch_id}", curve)
+            trails_coll.objects.link(trail)
+            return trail
+
+        trail_sel = _keyed_selection(adapter, trails_coll, "trail_").data(
+            trail_items, key=lambda i, item: str(item[0])
+        ).join(enter_trail)
+        for trail, (branch_id, path, material) in zip(trail_sel.elements, trail_sel.datum):
+            curve = trail.data
+            curve.splines.clear()
+            spline = curve.splines.new("POLY")
+            spline.points.add(len(path) - 1)
+            for p, co in zip(spline.points, path):
+                p.co = (*co, 1.0)
+            curve.materials.clear()
+            curve.materials.append(material)
+            if main_obj is not None and str(branch_id) == main_obj["d3_key"]:
+                # Same idea as halo_main above: a linked duplicate (not a
+                # rename) of the main branch's trail, next to halo_main.
+                # Shares the same Curve data-block, so editing/smoothing
+                # this object's points edits the real path data too.
+                _linked_duplicate(root, "trail_main", curve)
 
     scene = bpy.context.scene
     scene.frame_start, scene.frame_end = frame_start, frame_end

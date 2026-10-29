@@ -64,6 +64,7 @@ def _load_sibling(module_name):
 
 _core = _load_sibling("constant_mass_core")
 _geo = _load_sibling("constant_mass_geometry_io")
+_attrs = _load_sibling("_attr_io_shared")
 
 PARAMS = {
     "source_object": {
@@ -137,20 +138,6 @@ PARAMS = {
 def _read_point_attribute(obj, context, name):
     depsgraph = context.evaluated_depsgraph_get()
     return _geo.read_point_attribute(obj, depsgraph, name)
-
-
-def _write_float_attribute(obj, name, values):
-    db.store_named_attribute(
-        obj, np.asarray(values, dtype=np.float32), name,
-        atype=db.AttributeTypes.FLOAT, domain=db.AttributeDomains.POINT,
-    )
-
-
-def _write_int_attribute(obj, name, values):
-    db.store_named_attribute(
-        obj, np.asarray(values, dtype=np.int32), name,
-        atype=db.AttributeTypes.INT, domain=db.AttributeDomains.POINT,
-    )
 
 
 def execute(context, params):
@@ -233,9 +220,9 @@ def execute(context, params):
             out_obj, zeros, "position", atype=db.AttributeTypes.FLOAT_VECTOR, domain=db.AttributeDomains.POINT
         )
 
-    _write_float_attribute(out_obj, "emission_time", emission_times)
-    _write_float_attribute(out_obj, "cumulative_mass", target_masses)
-    _write_int_attribute(out_obj, "sphere_index", np.arange(1, k_max + 1, dtype=np.int32))
+    _attrs.write_float_attribute(out_obj, "emission_time", emission_times)
+    _attrs.write_float_attribute(out_obj, "cumulative_mass", target_masses)
+    _attrs.write_int_attribute(out_obj, "sphere_index", np.arange(1, k_max + 1, dtype=np.int32))
 
     leftover = total_mass - k_max * particle_mass
     print(

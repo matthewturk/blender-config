@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import csv
 
@@ -31,6 +32,17 @@ import databpy as db
 # attribute support across versions (see hdf5_to_curves.py for the same
 # issue on the write side).
 
+def _load_sibling(module_name):
+    path = os.path.join(os.path.dirname(__file__), "..", f"{module_name}.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_geo = _load_sibling("constant_mass_geometry_io")
+
+
 PARAMS = {
     "source_object": {
         "type": "OBJECT",
@@ -51,18 +63,6 @@ PARAMS = {
         "description": "Comma-separated attribute names to export. Leave blank to export every non-hidden point attribute",
     },
 }
-
-
-def _evaluated_geometry_set(obj, context):
-    """The evaluated bpy.types.GeometrySet for `obj` (mesh/curves/pointcloud/
-    instances components, side by side) - core Blender API, called directly
-    rather than through databpy.GeometrySet, since that wrapper doesn't exist
-    in every installed databpy version (0.6.2, seen elsewhere in this Blender
-    install, predates it - it has no geometry.py at all).
-    """
-    depsgraph = context.evaluated_depsgraph_get()
-    evaluated_object = depsgraph.id_eval_get(obj)
-    return evaluated_object.evaluated_geometry()
 
 
 def _present_components(geometry_set):
@@ -94,7 +94,7 @@ def execute(context, params):
     if obj is None:
         raise ValueError("No source object given")
 
-    geometry_set = _evaluated_geometry_set(obj, context)
+    geometry_set = _geo.evaluated_geometry_set(obj, context.evaluated_depsgraph_get())
     data = geometry_set.curves
 
     if data is None:

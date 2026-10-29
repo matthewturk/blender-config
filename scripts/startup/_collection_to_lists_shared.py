@@ -5,12 +5,12 @@
 # via the repo's usual "_load_sibling" pattern (see
 # user_scripts/constant_mass_emission_times.py) rather than a package-
 # relative import: user_scripts/ and node_scripts/ files are loaded one at
-# a time by dynamic_script_runner.py via importlib.util.spec_from_file_
+# a time by the Script Runner extension via importlib.util.spec_from_file_
 # location, with no parent package context, so `from . import x` doesn't
 # work from inside them.
 #
 # Kept out of user_scripts/ and node_scripts/ themselves (one directory up,
-# in scripts/startup/) so dynamic_script_runner.py's directory scans (which
+# in scripts/startup/) so the Script Runner extension's directory scans (which
 # only look for a PARAMS+execute pair or a build() function) never mistake
 # this for a runnable script/node-tree entry of its own.
 

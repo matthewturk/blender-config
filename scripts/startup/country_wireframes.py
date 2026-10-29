@@ -1351,6 +1351,48 @@ def _create_boundary_wire_object_from_lines(
     latlon_bounds=None,
     globe_root=None,
 ):
+    mesh = _boundary_wire_mesh(
+        obj_name,
+        line_coords,
+        globe_radius,
+        m49=m49,
+        max_segment_deg=max_segment_deg,
+        spherical_tolerance_deg=spherical_tolerance_deg,
+        coord_settings=coord_settings,
+        latlon_bounds=latlon_bounds,
+    )
+    if mesh is None:
+        return None
+
+    obj = bpy.data.objects.new(obj_name, mesh)
+    obj.display_type = "WIRE"
+    _set_geo_identity(obj, kind, geo_name, continent_name, iso2, iso3, m49)
+    collection.objects.link(obj)
+    _parent_to_globe_root(obj, globe_root)
+    return obj
+
+
+def _set_geo_identity(obj, kind, geo_name, continent_name, iso2, iso3, m49=""):
+    obj["geo_kind"] = kind
+    obj["geo_name"] = geo_name
+    obj["geo_continent"] = continent_name
+    obj["geo_iso2"] = iso2
+    obj["geo_iso3"] = iso3
+    obj["geo_m49"] = m49
+
+
+def _boundary_wire_mesh(
+    obj_name,
+    line_coords,
+    globe_radius,
+    m49="",
+    max_segment_deg=0.0,
+    spherical_tolerance_deg=0.0,
+    coord_settings=None,
+    latlon_bounds=None,
+):
+    """Wire mesh (vertices + edges, no faces) tracing line_coords on the
+    globe or flat map, or None if nothing drawable remains."""
     vertices = []
     edges = []
     offset = 0
@@ -1385,18 +1427,7 @@ def _create_boundary_wire_object_from_lines(
     # reachable from inside a node tree, only real geometry attributes are.
     m49_attr = mesh.attributes.new(name="geo_m49", type="INT", domain="POINT")
     m49_attr.data.foreach_set("value", [int(m49) if m49 else -1] * len(vertices))
-
-    obj = bpy.data.objects.new(obj_name, mesh)
-    obj.display_type = "WIRE"
-    obj["geo_kind"] = kind
-    obj["geo_name"] = geo_name
-    obj["geo_continent"] = continent_name
-    obj["geo_iso2"] = iso2
-    obj["geo_iso3"] = iso3
-    obj["geo_m49"] = m49
-    collection.objects.link(obj)
-    _parent_to_globe_root(obj, globe_root)
-    return obj
+    return mesh
 
 
 def _create_curve_outline_object_from_lines(
@@ -2038,42 +2069,6 @@ def _raster_dimensions(path):
         return None
 
 
-def _create_boundary_wire_object(
-    collection,
-    obj_name,
-    geometry,
-    globe_radius,
-    kind,
-    geo_name,
-    continent_name,
-    iso2,
-    iso3,
-    m49="",
-    max_segment_deg=0.0,
-    spherical_tolerance_deg=0.0,
-    coord_settings=None,
-    latlon_bounds=None,
-    globe_root=None,
-):
-    return _create_boundary_wire_object_from_lines(
-        collection=collection,
-        obj_name=obj_name,
-        line_coords=_iter_line_coords(geometry),
-        globe_radius=globe_radius,
-        kind=kind,
-        geo_name=geo_name,
-        continent_name=continent_name,
-        iso2=iso2,
-        iso3=iso3,
-        m49=m49,
-        max_segment_deg=max_segment_deg,
-        spherical_tolerance_deg=spherical_tolerance_deg,
-        coord_settings=coord_settings,
-        latlon_bounds=latlon_bounds,
-        globe_root=globe_root,
-    )
-
-
 def _create_reference_globe(collection, radius, resolution, globe_root=None):
     mesh = _build_sphere_mesh(
         "GeoReferenceGlobeMesh",
@@ -2390,31 +2385,69 @@ def _sync_country_items_from_world(settings, world):
         item.selected = bool(selected_by_name.get(name, False))
 
 
-def _make_linked_instance(
-    name,
-    source_mesh,
-    location,
-    collection,
-    kind,
-    geo_name,
-    continent_name,
-    iso2,
-    iso3,
-    m49="",
-    globe_root=None,
-):
-    obj = bpy.data.objects.new(name, source_mesh)
-    obj.location = location
-    obj.display_type = "WIRE"
-    obj["geo_kind"] = kind
-    obj["geo_name"] = geo_name
-    obj["geo_continent"] = continent_name
-    obj["geo_iso2"] = iso2
-    obj["geo_iso3"] = iso3
-    obj["geo_m49"] = m49
-    collection.objects.link(obj)
-    _parent_to_globe_root(obj, globe_root)
-    return obj
+def _reconcile_geo_markers(collection, prefix, items, remove_stale, globe_root=None):
+    """Create, update or remove one marker object per item in `collection`.
+
+    Uses d3blender's data().join(), keyed by the item's geo name, so re-running
+    Create Markers updates existing objects in place: anything pointing at a
+    country object (a CMET generator's Country A/B, a Geometry Nodes Object
+    input, a linked project) keeps working, and modifiers added by hand stay.
+    Each item supplies "name", "mesh" (a boundary wire mesh, or the shared
+    prototype sphere in marker mode), "location" and the geo identity fields.
+    remove_stale deletes markers whose name isn't in `items`; otherwise
+    they're left alone, so runs with different selections accumulate.
+
+    Objects made before this used joins carry no d3_key; ones still named
+    exactly <prefix><name> are adopted. Returns the names of leftover
+    <prefix><name>.NNN duplicates from those older runs, which are left as is.
+    """
+    import re
+
+    from d3blender import select
+    from d3blender.blender_adapter import get_adapter
+
+    duplicates = []
+    for obj in collection.objects:
+        if "d3_key" in obj or not obj.name.startswith(prefix):
+            continue
+        if re.search(r"\.\d{3}$", obj.name):
+            duplicates.append(obj.name)
+        else:
+            obj["d3_key"] = obj.name[len(prefix):]
+
+    def enter(item):
+        obj = bpy.data.objects.new(f"{prefix}{item['name']}", item["mesh"])
+        collection.objects.link(obj)
+        return obj
+
+    def remove(obj):
+        mesh = obj.data
+        bpy.data.objects.remove(obj, do_unlink=True)
+        if mesh is not None and mesh.users == 0:
+            bpy.data.meshes.remove(mesh)
+
+    joined = select(get_adapter(), list(collection.objects)).data(
+        items, key=lambda i, item: item["name"]
+    ).join(enter, exit=remove if remove_stale else (lambda obj: None))
+
+    for obj, item in zip(joined.elements, joined.datum):
+        old_mesh = obj.data
+        obj.data = item["mesh"]
+        if old_mesh is not None and old_mesh is not item["mesh"] and old_mesh.users == 0:
+            bpy.data.meshes.remove(old_mesh)
+        obj.location = item["location"]
+        obj.display_type = "WIRE"
+        _set_geo_identity(
+            obj,
+            item["kind"],
+            item["name"],
+            item["continent"],
+            item["iso2"],
+            item["iso3"],
+            item["m49"],
+        )
+        _parent_to_globe_root(obj, globe_root)
+    return duplicates
 
 
 def _write_anchor_attributes(anchor_obj, items):
@@ -2664,10 +2697,17 @@ def _apply_node_group_input_defaults(modifier, node_group, values):
         value = values.get(item.name)
         if value is None:
             continue
+        # Blender 5.2+ keeps GN modifier inputs in modifier.properties.inputs
+        # (each a property group holding "value"); modifier[identifier] = value
+        # raises TypeError there, which used to be swallowed here silently.
+        properties = getattr(modifier, "properties", None)
         try:
-            modifier[item.identifier] = value
-        except Exception:
-            pass
+            if properties is not None:
+                properties.inputs[item.identifier]["value"] = value
+            else:
+                modifier[item.identifier] = value
+        except Exception as exc:
+            print(f"[Geo] Couldn't set input '{item.name}' on {modifier.name}: {exc}")
 
 
 class GeoCountryListItem(bpy.types.PropertyGroup):
@@ -2757,7 +2797,11 @@ class CountryWireframeSettings(bpy.types.PropertyGroup):
     )
     clear_existing: bpy.props.BoolProperty(
         name="Clear Existing",
-        description="Remove previously generated geo wireframe objects first",
+        description=(
+            "Remove previously generated geo objects first. Country/continent "
+            "markers that are still selected are updated in place instead, so "
+            "references to them keep working; deselected ones are removed"
+        ),
         default=True,
     )
     countries_enabled: bpy.props.BoolProperty(
@@ -3541,10 +3585,10 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
         reference_coll = _get_or_create_collection(root, "Geo Reference")
 
         if settings.clear_existing:
+            # Country/continent markers aren't wiped: _reconcile_geo_markers
+            # updates them in place and removes only the deselected ones.
             collections = (
                 prototypes,
-                countries_coll,
-                continents_coll,
                 anchors_coll,
                 reference_coll,
             )
@@ -3600,6 +3644,9 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
         missing = []
         anchor_points = []
         anchor_items = []
+        country_markers = []
+        continent_markers = []
+        boundary_mode = settings.generation_mode == "BOUNDARY"
 
         if settings.countries_enabled:
             for token in country_tokens:
@@ -3624,39 +3671,32 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                 iso3 = str(row["iso_a3"])
                 m49 = m49_lookup.get(iso3.upper(), "")
 
-                if settings.generation_mode == "BOUNDARY":
-                    created_obj = _create_boundary_wire_object(
-                        collection=countries_coll,
-                        obj_name=f"CountryWF_{name}",
-                        geometry=row.geometry,
-                        globe_radius=overlay_radius,
-                        kind="country",
-                        geo_name=name,
-                        continent_name=continent_name,
-                        iso2=iso2,
-                        iso3=iso3,
+                if boundary_mode:
+                    mesh = _boundary_wire_mesh(
+                        f"CountryWF_{name}",
+                        _iter_line_coords(row.geometry),
+                        overlay_radius,
                         m49=m49,
                         coord_settings=coord_settings,
                         latlon_bounds=latlon_bounds,
-                        globe_root=overlay_root,
                     )
-                    if created_obj is None:
+                    if mesh is None:
                         missing.append(token)
                         continue
                 else:
-                    _make_linked_instance(
-                        name=f"CountryWF_{name}",
-                        source_mesh=country_proto,
-                        location=location,
-                        collection=countries_coll,
-                        kind="country",
-                        geo_name=name,
-                        continent_name=continent_name,
-                        iso2=iso2,
-                        iso3=iso3,
-                        m49=m49,
-                        globe_root=overlay_root,
-                    )
+                    mesh = country_proto
+                country_markers.append(
+                    {
+                        "name": name,
+                        "mesh": mesh,
+                        "location": (0.0, 0.0, 0.0) if boundary_mode else location,
+                        "kind": "country",
+                        "continent": continent_name,
+                        "iso2": iso2,
+                        "iso3": iso3,
+                        "m49": m49,
+                    }
+                )
 
                 anchor_points.append(location)
                 anchor_items.append(
@@ -3686,36 +3726,30 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                     radius=overlay_radius,
                 )
 
-                if settings.generation_mode == "BOUNDARY":
-                    created_obj = _create_boundary_wire_object(
-                        collection=continents_coll,
-                        obj_name=f"ContinentWF_{continent_name}",
-                        geometry=item.get("geometry"),
-                        globe_radius=overlay_radius,
-                        kind="continent",
-                        geo_name=continent_name,
-                        continent_name=continent_name,
-                        iso2="",
-                        iso3="",
+                if boundary_mode:
+                    mesh = _boundary_wire_mesh(
+                        f"ContinentWF_{continent_name}",
+                        _iter_line_coords(item.get("geometry")),
+                        overlay_radius,
                         coord_settings=coord_settings,
                         latlon_bounds=latlon_bounds,
-                        globe_root=overlay_root,
                     )
-                    if created_obj is None:
+                    if mesh is None:
                         continue
                 else:
-                    _make_linked_instance(
-                        name=f"ContinentWF_{continent_name}",
-                        source_mesh=continent_proto,
-                        location=location,
-                        collection=continents_coll,
-                        kind="continent",
-                        geo_name=continent_name,
-                        continent_name=continent_name,
-                        iso2="",
-                        iso3="",
-                        globe_root=overlay_root,
-                    )
+                    mesh = continent_proto
+                continent_markers.append(
+                    {
+                        "name": continent_name,
+                        "mesh": mesh,
+                        "location": (0.0, 0.0, 0.0) if boundary_mode else location,
+                        "kind": "continent",
+                        "continent": continent_name,
+                        "iso2": "",
+                        "iso3": "",
+                        "m49": "",
+                    }
+                )
 
                 anchor_points.append(location)
                 anchor_items.append(
@@ -3730,6 +3764,22 @@ class OBJECT_OT_create_country_wireframes(bpy.types.Operator):
                     }
                 )
                 created += 1
+
+        duplicates = []
+        for coll, prefix, markers in (
+            (countries_coll, "CountryWF_", country_markers),
+            (continents_coll, "ContinentWF_", continent_markers),
+        ):
+            # A disabled kind reconciles against no items: cleared when Clear
+            # Existing is on, left alone otherwise (as before).
+            duplicates += _reconcile_geo_markers(
+                coll, prefix, markers, settings.clear_existing, overlay_root
+            )
+        if duplicates:
+            print(
+                f"[Geo Wireframes] {len(duplicates)} duplicate marker(s) left over from "
+                f"earlier runs (e.g. {duplicates[0]}); safe to delete by hand"
+            )
 
         if anchor_points:
             _create_anchor_object(

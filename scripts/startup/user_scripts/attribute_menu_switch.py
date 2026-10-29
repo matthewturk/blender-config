@@ -1,3 +1,5 @@
+import os
+import importlib.util
 import bpy
 
 # Skeleton: like `collection_to_lists.py`, this hand-builds a geometry node
@@ -23,6 +25,18 @@ NAMED_ATTRIBUTE_TYPE = {
     "VECTOR": "FLOAT_VECTOR",
     "RGBA": "FLOAT_COLOR",
 }
+
+
+def _load_sibling(module_name):
+    path = os.path.join(os.path.dirname(__file__), "..", f"{module_name}.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_attrs = _load_sibling("_attr_io_shared")
+
 
 PARAMS = {
     "source_object": {
@@ -51,17 +65,6 @@ PARAMS = {
         "description": "Data type for the Menu Switch output and Named Attribute reads",
     },
 }
-
-
-def ensure_socket(tree, in_out, name, socket_type):
-    for item in tree.interface.items_tree:
-        if (
-            getattr(item, "item_type", None) == "SOCKET"
-            and item.in_out == in_out
-            and item.name == name
-        ):
-            return item
-    return tree.interface.new_socket(name=name, in_out=in_out, socket_type=socket_type)
 
 
 def execute(context, params):
@@ -99,10 +102,10 @@ def execute(context, params):
     group_output.location = (400, 0)
 
     # ── interface: Geometry passthrough + the Menu dropdown + typed output ──
-    ensure_socket(node_tree, "INPUT", "Geometry", "NodeSocketGeometry")
-    ensure_socket(node_tree, "OUTPUT", "Geometry", "NodeSocketGeometry")
-    ensure_socket(node_tree, "INPUT", "Attribute", "NodeSocketMenu")
-    ensure_socket(node_tree, "OUTPUT", "Value", VALUE_SOCKET_TYPE[output_type])
+    _attrs.ensure_socket(node_tree, "INPUT", "Geometry", "NodeSocketGeometry")
+    _attrs.ensure_socket(node_tree, "OUTPUT", "Geometry", "NodeSocketGeometry")
+    _attrs.ensure_socket(node_tree, "INPUT", "Attribute", "NodeSocketMenu")
+    _attrs.ensure_socket(node_tree, "OUTPUT", "Value", VALUE_SOCKET_TYPE[output_type])
 
     # ── Menu Switch node, with one enum item + Named Attribute per attribute ──
     switch = nodes.new("GeometryNodeMenuSwitch")

@@ -1,3 +1,5 @@
+import os
+import importlib.util
 import sqlite3
 
 import bpy
@@ -10,11 +12,22 @@ import databpy as db
 # meaningful here - this is a plain attribute table, not spatial data), and
 # one point-domain attribute per result column, typed from pandas' own dtype
 # inference (int/float/bool columns via databpy; string/object columns
-# written by hand - see _write_string_attribute).
+# written by hand - see _attr_io_shared.write_string_attribute).
 #
 # Output is either a Mesh (one vertex per row) or a single-spline Curves
 # object (one point per row, matching the convention curve_to_csv.py/
 # hdf5_to_curves.py already use elsewhere in this toolchain) - your choice.
+
+def _load_sibling(module_name):
+    path = os.path.join(os.path.dirname(__file__), "..", f"{module_name}.py")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_attrs = _load_sibling("_attr_io_shared")
+
 
 PARAMS = {
     "db_path": {
@@ -64,21 +77,6 @@ PARAMS = {
 }
 
 
-def _write_string_attribute(obj_data, name, values, domain):
-    """Write a STRING attribute by hand through bpy's attributes API.
-
-    databpy's store_named_attribute isn't consistent about STRING support
-    across installed versions (see hdf5_to_curves.py for the same issue).
-    """
-    attr = obj_data.attributes.get(name)
-    if attr is None or attr.data_type != "STRING" or attr.domain != domain:
-        if attr is not None:
-            obj_data.attributes.remove(attr)
-        attr = obj_data.attributes.new(name=name, type="STRING", domain=domain)
-    for item, value in zip(attr.data, values):
-        item.value = str(value).encode("utf-8")
-
-
 def _store_column(obj, obj_data, name, series):
     if pd.api.types.is_bool_dtype(series):
         arr = series.to_numpy(dtype=bool)
@@ -91,7 +89,7 @@ def _store_column(obj, obj_data, name, series):
         db.store_named_attribute(obj, arr, name, atype=db.AttributeTypes.FLOAT, domain=db.AttributeDomains.POINT)
     else:
         arr = series.astype(str).to_numpy()
-        _write_string_attribute(obj_data, name, arr, domain="POINT")
+        _attrs.write_string_attribute(obj_data, name, arr, domain="POINT")
 
 
 def execute(context, params):

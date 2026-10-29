@@ -271,9 +271,7 @@ def load_and_sync_chezmoi(dummy=None):
 
     # project_dir resolved relative to this file's own location (config/
     # chezmoi_sync.py -> repo root is one level up) rather than a
-    # hardcoded absolute path, so this repo can live anywhere - see the
-    # matching comment in scripts/startup/flat_gis_importer.py's
-    # _ensure_venv(), which had the same hardcoded-path issue.
+    # hardcoded absolute path, so this repo can live anywhere.
     # realpath, not plain __file__: this module is only ever actually
     # loaded via scripts/startup/_chezmoi_sync_shim.py, whose own fix
     # (2026-09-18) already passes a resolved, non-symlinked path into
@@ -339,10 +337,8 @@ def load_and_sync_chezmoi(dummy=None):
         return
 
     # Dynamically attach venv path matching active Python major.minor version.
-    # Inserted at index 0, not appended - see the matching, more detailed
-    # comment on this same choice in scripts/startup/flat_gis_importer.py's
-    # _ensure_venv(): a real, confirmed conflict exists between this venv's
-    # own polars[rtcompat]/databpy and older copies of both that the "CSV
+    # Inserted at index 0, not appended: a real, confirmed conflict exists
+    # between this venv's own polars[rtcompat]/databpy and older copies of both that the "CSV
     # Importer" extension bundles into Blender's own shared
     # extensions/.local/.../site-packages pool and puts on sys.path too -
     # appending left it to load order, nondeterministically, which one won.
@@ -361,8 +357,8 @@ def load_and_sync_chezmoi(dummy=None):
     # A bare sys.path entry skips .pth processing, which is how uv editable
     # installs (__editable__.*.pth finder hooks) get onto the import path.
     # addsitedir() runs them without re-appending the already-present dir, and
-    # is idempotent - kept outside the guard above because flat_gis_importer's
-    # _ensure_venv() may have already put this dir first.
+    # is idempotent - kept outside the guard above because this dir may
+    # already have been put first by an earlier call.
     if os.path.exists(uv_venv):
         site.addsitedir(uv_venv)
 

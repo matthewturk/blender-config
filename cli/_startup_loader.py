@@ -26,9 +26,9 @@ class name, not by which Python module/package imported them), and the
 probe below detects that state directly rather than caring what either
 path called itself.
 
-If a real Blender session (or the `bpy` module, if it resolves the same
-user script path chezmoi's symlink points at) already auto-loaded these
-scripts, registration is skipped (detected via an already-registered
+If a real Blender session already has the GeoJSON importer (from the AVL
+GeoViz extension, or the `bpy` module resolving the same user script path
+chezmoi's symlink points at), registration is skipped (detected via an already-registered
 operator class) to avoid a "class already registered" error - so this is
 safe to call unconditionally at the top of any cli/ tool.
 """
@@ -88,4 +88,9 @@ def load_and_register():
         spec.loader.exec_module(module)
 
     module.register()
+    # The GIS tools are no longer registered by the package itself (they
+    # live in the AVL GeoViz extension, which a pip `bpy` doesn't load), so
+    # register this repo's remaining copies directly.
+    for name in ("geo_coord", "country_wireframes"):
+        importlib.import_module(f"{PACKAGE_NAME}.{name}").register()
     return module

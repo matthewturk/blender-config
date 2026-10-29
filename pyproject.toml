@@ -25,7 +25,10 @@ dependencies = [
     "usd-core>=26.8",
     "polars[rtcompat]>=1.44.2",
     "yt-idv",
+    "d3blender",
 ]
 
 [tool.uv.sources]
-yt-idv = { path = "/home/mturk/yt/cycles-yt/yt_idv" }
+yt-idv = { path = "/home/mturk/dxl/yt_idv", editable = true }
+yt = { path = "/home/mturk/yt/yt-ghost-zone", editable = true }
+d3blender = { path = "/home/mturk/dev/d3blender", editable = true }

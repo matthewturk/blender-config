@@ -21,7 +21,7 @@ NAME = "Emission Scale Ramp"
 # version reads a FLOAT attribute that already holds each element's own
 # emission time in frame units directly (default name "emission_time" -
 # CMET's own attribute name, see constant_mass_emission_generator.py's
-# `_write_float_attribute(obj, "emission_time", emission_times)`), and
+# `_attrs.write_float_attribute(obj, "emission_time", emission_times)`), and
 # computes `scale = clamp((current_frame - emission_time) / frame_delta,
 # min_scale, max_scale)`. This is a strict generalization of the original
 # formula (which is the special case emission_time == index * frame_delta)

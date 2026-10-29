@@ -25,7 +25,7 @@ PARAMS = {
 def _load_sibling(module_name):
     """Load a module from scripts/startup/ (one directory up from
     node_scripts/) by file path - node_scripts/ files are loaded
-    standalone by dynamic_script_runner.py (no parent package context),
+    standalone by the Script Runner extension (no parent package context),
     so a package-relative import doesn't work here. Same pattern as
     user_scripts/constant_mass_emission_times.py's _load_sibling.
     """

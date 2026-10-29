@@ -18,12 +18,12 @@ import databpy as db
 # Import this via the repo's usual "_load_sibling" pattern (see
 # user_scripts/constant_mass_emission_times.py) rather than a package-
 # relative import: user_scripts/ files are loaded one at a time by
-# dynamic_script_runner.py via importlib.util.spec_from_file_location, with
+# the Script Runner extension via importlib.util.spec_from_file_location, with
 # no parent package context, so `from . import x` doesn't work from inside
 # them.
 #
 # Kept out of user_scripts/ itself (one directory up, in scripts/startup/) so
-# dynamic_script_runner.py's directory scans (which only look for a
+# the Script Runner extension's directory scans (which only look for a
 # PARAMS+execute pair) never mistake this for a runnable script of its own.
 
 
