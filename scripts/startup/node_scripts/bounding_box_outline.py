@@ -1,4 +1,5 @@
 NAME = "Bounding Box Outline"
+DESCRIPTION = "Draw the outline of a box between two corner inputs."
 
 # Ported from /tmp/blendyt_review/grid_creator.py's `grid_as_points` (blendyt's
 # `nodetree_script` DSL), translated to this repo's `nodebpy` DSL.

@@ -1,4 +1,5 @@
 NAME = "Passthrough"
+DESCRIPTION = "Pass the geometry through unchanged."
 
 
 def build(tree, params):

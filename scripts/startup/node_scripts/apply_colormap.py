@@ -1,4 +1,5 @@
 NAME = "Colormapped Mesh"
+DESCRIPTION = "Store an attribute's value and range for coloring, and build the Apply Colormap material that reads them."
 
 MATERIAL_NAME = "Apply Colormap"
 

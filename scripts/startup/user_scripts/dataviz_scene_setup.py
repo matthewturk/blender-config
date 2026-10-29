@@ -12,6 +12,8 @@ import bpy
 # re-running with the same name updates the existing setup in place instead
 # of creating duplicates.
 
+DESCRIPTION = "Create a scene for flat 2D dataviz: orthographic camera, flat lighting and a transparent background."
+
 PARAMS = {
     "scene_name": {
         "type": "STRING",

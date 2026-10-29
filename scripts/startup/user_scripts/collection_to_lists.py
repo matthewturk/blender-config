@@ -3,6 +3,8 @@ import importlib.util
 
 import bpy
 
+DESCRIPTION = "Gather the custom properties of a collection's objects into per-property list outputs on a node group, updated in place."
+
 PARAMS = {
     "input_collection": {
         "type": "COLLECTION",

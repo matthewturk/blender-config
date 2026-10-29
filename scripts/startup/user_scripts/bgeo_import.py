@@ -25,6 +25,8 @@ import numpy as np
 # as static POINT attributes - see the note printed at the end of a run
 # that finds any.
 
+DESCRIPTION = "Import a folder of Houdini BGEO point caches as one animated point cloud (one file per frame)."
+
 PARAMS = {
     "directory_path": {
         "type": "DIR_PATH",

@@ -29,6 +29,8 @@ def _load_sibling(module_name):
 _attrs = _load_sibling("_attr_io_shared")
 
 
+DESCRIPTION = "Run a SQL query on a SQLite database and load the rows as points, one attribute per column."
+
 PARAMS = {
     "db_path": {
         "type": "FILE_PATH",

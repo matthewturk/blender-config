@@ -27,6 +27,8 @@ def _load_sibling(module_name):
     return mod
 
 
+DESCRIPTION = "Bake matplotlib/cmyt colormaps into gradient images for Apply Colormap."
+
 PARAMS = {
     "mode": {
         "type": "ENUM",

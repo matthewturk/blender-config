@@ -1,4 +1,5 @@
 NAME = "Attribute Curve Map"
+DESCRIPTION = "Bake a curve's attribute (or Y coordinates) into a normalized Float Curve node."
 
 PARAMS = {
     "source_object": {

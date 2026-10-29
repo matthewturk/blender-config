@@ -1,4 +1,5 @@
 NAME = "Animate Along CSV Positions"
+DESCRIPTION = "String the input's x/y/z point attributes into a curve and move a marker sphere along it over time."
 
 # Ported from /tmp/blendyt_review/grid_creator.py's `positions_from_csv` +
 # `animated_orbit` (blendyt's `nodetree_script` DSL), combined into ONE

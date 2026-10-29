@@ -24,6 +24,8 @@ import numpy as np
 # consistent before use; halo_importer.py always sorted by particle_index
 # for exactly this reason.
 
+DESCRIPTION = "Import a folder of per-frame CSVs as one animated point cloud (one file per frame)."
+
 PARAMS = {
     "directory_path": {
         "type": "DIR_PATH",

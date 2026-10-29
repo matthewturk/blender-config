@@ -1,4 +1,5 @@
 NAME = "Collection to Lists"
+DESCRIPTION = "Gather the custom properties of a collection's objects into per-property list outputs on a node group, rebuilt each time."
 
 PARAMS = {
     "input_collection": {

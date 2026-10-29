@@ -38,6 +38,8 @@ def _load_sibling(module_name):
 _attrs = _load_sibling("_attr_io_shared")
 
 
+DESCRIPTION = "Build a node group with a dropdown that picks any of a source object's attributes."
+
 PARAMS = {
     "source_object": {
         "type": "OBJECT",

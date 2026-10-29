@@ -10,6 +10,8 @@ import csv
 # back to a name match if name_column is given, otherwise they're just
 # reported as unmatched.
 
+DESCRIPTION = "Copy columns from a CSV keyed by UN M49 code onto matching country wireframes as attributes."
+
 PARAMS = {
     "csv_path": {
         "type": "FILE_PATH",

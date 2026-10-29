@@ -1,4 +1,5 @@
 NAME = "Hedgehog Sphere"
+DESCRIPTION = "Sphere with outward-facing spikes, with live size and density inputs."
 
 # Ported from /tmp/blendyt_review/outward_facing_sphere.py's
 # `outward_facing_sphere` (blendyt's `nodetree_script` DSL) into this repo's

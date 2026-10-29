@@ -23,6 +23,8 @@ import bpy
 # stricter/looser noise threshold, without leaving this dialog to go find
 # those settings in Render Properties.
 
+DESCRIPTION = "Print a read-only report of render-cost settings in the scene to the system console."
+
 PARAMS = {
     "apply_overrides": {
         "type": "BOOL",

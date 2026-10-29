@@ -29,6 +29,8 @@ def _load_sibling(module_name):
 _attrs = _load_sibling("_attr_io_shared")
 
 
+DESCRIPTION = "Build a node group with a dropdown of a CSV's names that returns the value from another column."
+
 PARAMS = {
     "csv_path": {
         "type": "FILE_PATH",

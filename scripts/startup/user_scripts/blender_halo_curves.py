@@ -101,6 +101,8 @@ import bpy
 import numpy as np
 import databpy as db
 
+DESCRIPTION = "Import a halo ancestry CSV as static curves, with every field as attributes for Geometry Nodes."
+
 PARAMS = {
     "csv_path": {
         "type": "FILE_PATH",

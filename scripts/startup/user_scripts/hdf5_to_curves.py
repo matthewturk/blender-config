@@ -40,6 +40,8 @@ def _load_sibling(module_name):
 _attrs = _load_sibling("_attr_io_shared")
 
 
+DESCRIPTION = "Import an HDF5 group as one Curves object: each child group a curve, each dataset a point attribute."
+
 PARAMS = {
     "hdf5_path": {
         "type": "FILE_PATH",

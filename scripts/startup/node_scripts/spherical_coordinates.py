@@ -1,4 +1,5 @@
 NAME = "Spherical Coordinates"
+DESCRIPTION = "Convert a position to spherical coordinates (r, theta, phi)."
 
 # Ported from /tmp/blendyt_review/sphere_perturbations.py's
 # `spherical_coordinates` function (blendyt's `nodetree_script` DSL),

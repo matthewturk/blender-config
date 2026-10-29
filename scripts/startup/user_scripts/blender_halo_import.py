@@ -35,6 +35,8 @@ import bpy
 from d3blender import scale_linear, select
 from d3blender.blender_adapter import get_adapter
 
+DESCRIPTION = "Animate a halo ancestry CSV: one keyframed sphere per branch, shrinking into its descendant at a merger."
+
 PARAMS = {
     "csv_path": {
         "type": "FILE_PATH",

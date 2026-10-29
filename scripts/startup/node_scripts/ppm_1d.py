@@ -1,4 +1,5 @@
 NAME = "PPM 1D Interpolation"
+DESCRIPTION = "Resample a curve's attribute over an x range with piecewise-parabolic (PPM) interpolation."
 
 # Non-uniform-grid PPM (Colella & Woodward 1984), with the x-axis carried
 # explicitly and an optional (runtime-toggleable) monotonicity limiter.

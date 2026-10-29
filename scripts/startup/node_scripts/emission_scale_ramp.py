@@ -1,4 +1,5 @@
 NAME = "Emission Scale Ramp"
+DESCRIPTION = "Scale emitted spheres from zero up to full size after their emission time."
 
 # Ported from /tmp/blendyt_review/sphere_perturbations.py's `emitted_scale`
 # function (blendyt's `nodetree_script` DSL), translated to this repo's

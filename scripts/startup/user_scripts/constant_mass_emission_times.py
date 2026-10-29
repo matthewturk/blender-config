@@ -66,6 +66,8 @@ _core = _load_sibling("constant_mass_core")
 _geo = _load_sibling("constant_mass_geometry_io")
 _attrs = _load_sibling("_attr_io_shared")
 
+DESCRIPTION = "Compute emission times for equal-mass spheres from a time/mass attribute series."
+
 PARAMS = {
     "source_object": {
         "type": "OBJECT",

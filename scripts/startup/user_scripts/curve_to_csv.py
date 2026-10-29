@@ -43,6 +43,8 @@ def _load_sibling(module_name):
 _geo = _load_sibling("constant_mass_geometry_io")
 
 
+DESCRIPTION = "Export every point attribute of a single-spline Curves object to a CSV."
+
 PARAMS = {
     "source_object": {
         "type": "OBJECT",
