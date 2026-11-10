@@ -18,6 +18,24 @@ PARAMS = {
         "name": "Output Geonode Group Name",
         "description": "The geonode group name to put the outputs into"
     },
+    "include_children": {
+        "type": "BOOL",
+        "default": False,
+        "name": "Include Child Collections",
+        "description": "Also read objects in nested collections (e.g. a GeoJSON import split by type). Indices then follow name order across all of them, not Collection Info's children",
+    },
+    "shared_only": {
+        "type": "BOOL",
+        "default": False,
+        "name": "Shared Properties Only",
+        "description": "Only make lists for properties every object has, instead of every property any object has",
+    },
+    "placeholder": {
+        "type": "STRING",
+        "default": "",
+        "name": "Placeholder",
+        "description": "Value used for an object that lacks a property",
+    },
     "debug": {
         "type": "BOOL",
         "default": False,
@@ -123,7 +141,10 @@ def execute(context, params):
     # with underscore-prefixed id-property metadata (e.g. "_RNA_UI")
     # filtered out.
     _ordered_objects, string_values = _shared.gather_property_lists(
-        collection, debug=debug, log_prefix="[collection_to_lists]"
+        collection, debug=debug, log_prefix="[collection_to_lists]",
+        include_children=params["include_children"],
+        shared_only=params["shared_only"],
+        placeholder=params["placeholder"],
     )
 
     print(f"Found {len(string_values)} items to convert into nodes.")

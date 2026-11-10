@@ -38,7 +38,7 @@ def natural_sort_key(name):
     ]
 
 
-def order_collection_objects(collection):
+def order_collection_objects(collection, include_children=False):
     """Collection's objects, sorted with natural_sort_key - NOT
     collection.objects' own iteration order (link order, unrelated to
     name), and NOT plain sorted()/o.name either (case-sensitive, see
@@ -49,11 +49,18 @@ def order_collection_objects(collection):
     tool can change. If these lists are meant to be indexed with the same
     index Collection Info/Get List Item produces, they need the SAME order
     GN uses, or every index silently points at the wrong object.
+
+    With include_children, objects in nested collections are included too
+    (collection.all_objects), in the same name order. Collection Info lists
+    a child collection as one instance rather than its objects, so those
+    indices no longer line up with Collection Info's children.
     """
-    return sorted(collection.objects, key=lambda o: natural_sort_key(o.name))
+    objects = collection.all_objects if include_children else collection.objects
+    return sorted(objects, key=lambda o: natural_sort_key(o.name))
 
 
-def gather_property_lists(collection, debug=False, log_prefix="[collection_to_lists]"):
+def gather_property_lists(collection, debug=False, log_prefix="[collection_to_lists]",
+                          include_children=False, shared_only=False, placeholder=""):
     """Walk `collection`'s objects (in `order_collection_objects` order) and
     gather their custom properties into name-sorted, per-object-ordered
     lists of stringified values.
@@ -67,20 +74,29 @@ def gather_property_lists(collection, debug=False, log_prefix="[collection_to_li
     {property_name: [str(value) for each object in ordered_objects]},
     keyed in sorted (deterministic) order - NOT a plain set()'s iteration
     order, which varies run to run.
-    """
-    ordered_objects = order_collection_objects(collection)
 
-    all_keys = set()
-    for obj in ordered_objects:
-        all_keys.update(key for key in obj.keys() if not key.startswith("_"))
+    By default every property any object has gets a list, with
+    `placeholder` for objects that lack it; shared_only keeps just the
+    properties every object has. include_children: see
+    order_collection_objects.
+    """
+    ordered_objects = order_collection_objects(collection, include_children)
+
+    key_sets = [
+        {key for key in obj.keys() if not key.startswith("_")} for obj in ordered_objects
+    ]
+    if shared_only:
+        all_keys = set.intersection(*key_sets) if key_sets else set()
+    else:
+        all_keys = set().union(*key_sets)
 
     string_values = {key: [] for key in sorted(all_keys)}
     for obj in ordered_objects:
         for key in string_values:
-            string_values[key].append(str(obj.get(key, "")))
+            string_values[key].append(str(obj[key]) if key in obj else placeholder)
         if debug:
             print(f"{log_prefix} {obj.name}: " + ", ".join(
-                f"{key}={obj.get(key, '')!r}" for key in string_values
+                f"{key}={obj.get(key, placeholder)!r}" for key in string_values
             ))
 
     return ordered_objects, string_values

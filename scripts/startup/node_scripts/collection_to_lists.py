@@ -14,6 +14,24 @@ PARAMS = {
         "name": "Node Group Name",
         "description": "Name for the output geometry node group",
     },
+    "include_children": {
+        "type": "BOOL",
+        "default": False,
+        "name": "Include Child Collections",
+        "description": "Also read objects in nested collections (e.g. a GeoJSON import split by type). Indices then follow name order across all of them, not Collection Info's children",
+    },
+    "shared_only": {
+        "type": "BOOL",
+        "default": False,
+        "name": "Shared Properties Only",
+        "description": "Only make lists for properties every object has, instead of every property any object has",
+    },
+    "placeholder": {
+        "type": "STRING",
+        "default": "",
+        "name": "Placeholder",
+        "description": "Value used for an object that lacks a property",
+    },
     "debug": {
         "type": "BOOL",
         "default": False,
@@ -58,7 +76,12 @@ def build(tree, params):
     # Collection Info's "Separate Children" output order, so indices stay
     # aligned with it), and property keys come back sorted and with
     # underscore-prefixed id-property metadata (e.g. "_RNA_UI") filtered out.
-    _ordered_objects, string_values = _shared.gather_property_lists(collection, debug=debug)
+    _ordered_objects, string_values = _shared.gather_property_lists(
+        collection, debug=debug,
+        include_children=params.get("include_children", False),
+        shared_only=params.get("shared_only", False),
+        placeholder=params.get("placeholder", ""),
+    )
 
     if not string_values:
         tree.outputs.geometry("Output") >> tree.inputs.geometry("Geometry")
